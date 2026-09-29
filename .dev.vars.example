@@ -1,0 +1,7 @@
+# Copy to .dev.vars. Register a separate GitHub App for localhost.
+APP_ORIGIN=http://127.0.0.1:5173
+GITHUB_CLIENT_ID=
+GITHUB_CLIENT_SECRET=
+GITHUB_APP_SLUG=
+SESSION_SECRET=
+# Generate SESSION_SECRET with: openssl rand -base64 32

@@ -1,0 +1,5 @@
+{
+  "name": "ai-diff-runtime-probe",
+  "main": "runtime-diagnostic.ts",
+  "compatibility_date": "2026-09-29"
+}
