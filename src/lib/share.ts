@@ -149,26 +149,6 @@ export async function renderShareImage(result: ShareResult, theme: ShareImageThe
     const width = c.measureText(value).width;
     c.fillText(value, x - (align === 'center' ? width / 2 : align === 'right' ? width : 0), y);
   };
-  const wrappedContext = (value: string) => {
-    const words = value.split(' ');
-    let lines: string[] = [];
-    let size = 17;
-    do {
-      size -= 1;
-      c.font = font(size, 400);
-      lines = [];
-      let line = '';
-      for (const word of words) {
-        const next = line ? `${line} ${word}` : word;
-        if (line && c.measureText(next).width > 1088) {
-          lines.push(line);
-          line = word;
-        } else line = next;
-      }
-      if (line) lines.push(line);
-    } while (lines.length > 3 && size > 14);
-    lines.forEach((value, index) => text(value, 600, 480 + index * 22, size, colors.muted, 400, 1088, 14, 'center'));
-  };
 
   text(`@${result.login}`, 56, 64, 22, colors.text, 550);
   if (result.sample) text('Sample data · fictional account', 56, 94, 16, colors.muted);
@@ -216,25 +196,6 @@ export async function renderShareImage(result: ShareResult, theme: ShareImageThe
     }
   }
 
-  const fileFilter = result.fileFilter;
-  const incompleteFiles = fileFilter?.enabled ? fileFilter.uninspectedBefore.commits + fileFilter.uninspectedAfter.commits : 0;
-  const partial = result.coverage.incomplete > 0 || result.coverage.unavailable > 0 || incompleteFiles > 0;
-  const contextParts = [
-    `${partial ? 'Partial · ' : ''}${result.coverage.completed}/${result.coverage.total} repos complete`,
-    ...(result.includesPrivate ? ['Includes private totals'] : []),
-  ];
-  const filter = result.commitFilter;
-  if (filter?.enabled) {
-    const excluded = filter.excludedBefore.commits + filter.excludedAfter.commits;
-    if (filter.scope === 'before' || excluded > 0) {
-      contextParts.push(`${formatNumber(excluded)} commit${excluded === 1 ? '' : 's'} excluded (>100k changed lines; ${filter.scope === 'before' ? 'before only, unequal filter' : 'both periods'})`);
-    }
-  }
-  if (fileFilter) {
-    contextParts.push(`Lockfiles/checksums ${fileFilter.enabled ? 'excluded' : 'included'}`);
-    if (incompleteFiles > 0) contextParts.push(`Uninspected commits omitted: ${formatNumber(fileFilter.uninspectedBefore.commits)} before / ${formatNumber(fileFilter.uninspectedAfter.commits)} after`);
-  }
-  wrappedContext(contextParts.join(' · '));
   text('aidiff.cwb.sh · Code with Beto', 600, 552, 18, colors.muted, 400, 1088, 14, 'center');
   return new Promise((resolve, reject) => canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('Could not create the image.')), 'image/png'));
 }

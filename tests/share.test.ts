@@ -187,21 +187,18 @@ describe('file-filter aggregate sharing', () => {
     expect(decodeShare(raw({ ...cleanFixture, cutoff: '2100-01-01', after: { additions: 0, deletions: 0, commits: 0 }, fileFilter: { ...cleanFixture.fileFilter!, inspectedCommits: 100, excludedAfter: { additions: 0, deletions: 0 }, uninspectedAfter: { additions: 1, deletions: 0, commits: 1 } } }))).toBeNull();
   });
 
-  it('discloses file-only incompleteness and lockfile removals without describing raw totals as omitted', async () => {
+  it('keeps file inspection details in share text and out of exported images', async () => {
     const text = createShareText(cleanFixture);
     expect(text).toContain('6/6 repositories complete.');
     expect(text).toContain('Dependency lockfiles/checksums excluded in both periods: before 400 additions / 100 deletions; after 800 additions / 200 deletions.');
     expect(text).toContain('File inspection: 300 complete, 2 incomplete. Partial results: uninspected commits omitted (2 before, 0 after).');
     const image = await recordImage(cleanFixture);
     const context = image.labels.map(label => label.value).join(' ');
-    expect(context).toContain('Partial · 6/6 repos complete');
-    expect(context).toContain('Lockfiles/checksums excluded');
-    expect(context).toContain('Uninspected commits omitted: 2 before / 0 after');
+    expect(context).not.toMatch(/partial|repos complete|private|lockfiles|checksums|uninspected|omitted/i);
     const rawSnapshot: ShareResult = { ...cleanFixture, fileFilter: { ...cleanFixture.fileFilter!, enabled: false, inspectedCommits: 298, excludedBefore: { additions: 0, deletions: 0 }, excludedAfter: { additions: 0, deletions: 0 } } };
     expect(createShareText(rawSnapshot)).toContain('Uninspected commits retain raw line counts, subject to the size filter.');
     const rawImage = (await recordImage(rawSnapshot)).labels.map(label => label.value).join(' ');
-    expect(rawImage).toContain('Lockfiles/checksums included');
-    expect(rawImage).not.toMatch(/Partial|omitted/);
+    expect(rawImage).not.toMatch(/partial|repos complete|private|lockfiles|checksums|uninspected|omitted/i);
   });
 });
 
@@ -321,9 +318,7 @@ describe('share image comparison', () => {
     const footer = image.labels.find(label => label.value === 'aidiff.cwb.sh · Code with Beto')!;
     expect(footer.x + footer.width / 2).toBe(600);
     expect(footer.y).toBe(552);
-    const coverage = image.labels.find(label => label.value.includes('3/6 repos complete'))!;
-    expect(coverage.y).toBe(480);
-    expect(coverage.x + coverage.width / 2).toBe(600);
+    expect(image.labels.some(label => /repos complete|partial|private/i.test(label.value))).toBe(false);
   });
 
   it('keeps units below both totals, actual ranges and separate sample disclosure without old detail clutter', async () => {
@@ -335,28 +330,36 @@ describe('share image comparison', () => {
     expect(values).toContain('After');
     expect(values).toContain('Jan 1, 2019 – Sep 28, 2025');
     expect(values).toContain('Sep 29, 2025 – Sep 29, 2026');
-    expect(values.join(' ')).toContain('Partial · 3/6 repos complete');
-    expect(values.join(' ')).toContain('Includes private totals');
+    expect(values.join(' ')).not.toMatch(/partial|repos complete|private/i);
     expect(values.join(' ')).toContain('Sample data');
     expect(labels.find(label => label.value === '@octo-dev')).toMatchObject({ x: 56, y: 64 });
     expect(labels.find(label => label.value.includes('Sample data'))).toMatchObject({ x: 56, y: 94, size: 16 });
     expect(values).toContain('aidiff.cwb.sh · Code with Beto');
     expect(values.join(' ')).not.toMatch(/SHARED SNAPSHOT|My GitHub|commits · .*deleted|All commit sizes|Illustrative sample|Snapshot as of|Self-reported|authorship|productivity|%/);
-    expect(values).toHaveLength(12);
+    expect(values).toHaveLength(11);
   });
 
-  it('only adds filter context when it changed totals or treats the periods differently', async () => {
+  it('keeps size-filter details in the payload and share text, with no diagnostic labels on the image', async () => {
     const zero = { additions: 0, deletions: 0, commits: 0 };
     const filter = { enabled: true, threshold: 100_000, scope: 'both' as const, excludedBefore: zero, excludedAfter: zero };
-    const unchanged = await recordImage({ ...fixture, commitFilter: filter });
-    expect(unchanged.labels.some(label => label.value.includes('excluded'))).toBe(false);
-    const unequal = await recordImage({ ...fixture, commitFilter: { ...filter, scope: 'before' } });
-    expect(unequal.labels.map(label => label.value).join(' ')).toContain('0 commits excluded (>100k changed lines; before only, unequal filter)');
-    const changed = await recordImage({ ...fixture, commitFilter: { ...filter, excludedAfter: { additions: 100_001, deletions: 0, commits: 1 } } });
-    expect(changed.labels.map(label => label.value).join(' ')).toContain('1 commit excluded (>100k changed lines; both periods)');
+    for (const commitFilter of [
+      filter,
+      { ...filter, scope: 'before' as const },
+      { ...filter, excludedAfter: { additions: 100_001, deletions: 0, commits: 1 } },
+    ]) {
+      const snapshot = { ...fixture, commitFilter };
+      const image = await recordImage(snapshot);
+      expect(image.labels.map(label => label.value).join(' ')).not.toMatch(/partial|repos complete|private|excluded|filter|changed lines/i);
+      expect(decodeShare(encodeShare(snapshot))).toEqual(snapshot);
+      const text = createShareText(snapshot);
+      expect(text).toContain('3/6 repositories complete; partial results (2 incomplete, 1 unavailable)');
+      expect(text).toContain('Includes private repository totals.');
+      expect(text).toContain(`Size filter: >100,000 changed lines · ${commitFilter.excludedAfter.commits} commit${commitFilter.excludedAfter.commits === 1 ? '' : 's'} excluded`);
+      expect(text).toContain(commitFilter.scope === 'before' ? 'before only (unequal filter)' : 'both periods');
+    }
   });
 
-  it('fits long handles, maximum safe totals and long filter disclosures without overlap', async () => {
+  it('fits long handles and maximum safe totals without metadata affecting the layout', async () => {
     const large: ShareResult = {
       ...fixture, login: 'a'.repeat(39),
       before: { additions: 4_503_599_627_370_495, deletions: 0, commits: 1 },

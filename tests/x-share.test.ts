@@ -13,14 +13,24 @@ describe('X post URLs', () => {
     const url = new URL(createXPostUrl(result, resultUrl));
     expect(url.origin + url.pathname).toBe('https://x.com/intent/tweet');
     expect([...url.searchParams.keys()]).toEqual(['text', 'url']);
-    expect(url.searchParams.get('text')).toBe('GitHub, before and after AI: 138,820 → 327,173 lines added.');
+    expect(url.searchParams.get('text')).toBe("Here's @alexmorgan's AI diff. Code before and after AI.");
     expect(url.searchParams.get('url')).toBe(resultUrl);
     expect(url.hash).toBe('');
   });
 
-  it.each(['light', 'dark'])('identifies sample data and supports the %s preset', theme => {
-    const url = new URL(createXPostUrl(sample, `https://aidiff.cwb.sh/s/sample-${theme}`));
-    expect(url.searchParams.get('text')).toMatch(/^Sample GitHub, before and after AI:/);
+  it('uses a first-person caption only for the developer’s own result', () => {
+    const url = new URL(createXPostUrl(result, resultUrl, true));
+    expect(url.searchParams.get('text')).toBe("I checked my GitHub before and after I started coding with AI. Here's my diff.");
+  });
+
+  it('identifies the original developer when resharing someone else’s result', () => {
+    const url = new URL(createXPostUrl({ ...result, login: 'another-dev' }, resultUrl, false));
+    expect(url.searchParams.get('text')).toBe("Here's @another-dev's AI diff. Code before and after AI.");
+  });
+
+  it.each(['light', 'dark'])('identifies sample data even in the primary scan and supports the %s preset', theme => {
+    const url = new URL(createXPostUrl(sample, `https://aidiff.cwb.sh/s/sample-${theme}`, true));
+    expect(url.searchParams.get('text')).toBe('A sample AI diff. Code before and after AI.');
     expect(url.searchParams.get('url')).toBe(`https://aidiff.cwb.sh/s/sample-${theme}`);
   });
 
@@ -29,16 +39,17 @@ describe('X post URLs', () => {
     { ...result, coverage: { completed: 3, unavailable: 0, incomplete: 1, total: 4 } },
     { ...result, fileFilter: { ...result.fileFilter!, uninspectedBefore: { additions: 10, deletions: 0, commits: 1 } } },
     { ...result, fileFilter: { ...result.fileFilter!, uninspectedAfter: { additions: 10, deletions: 0, commits: 1 } } },
-  ])('preserves partial-history context', snapshot => {
-    expect(new URL(createXPostUrl(snapshot, resultUrl)).searchParams.get('text')).toMatch(/\(partial history\)$/);
+  ])('keeps coverage diagnostics out of the caption', snapshot => {
+    expect(new URL(createXPostUrl(snapshot, resultUrl, true)).searchParams.get('text')).toBe("I checked my GitHub before and after I started coding with AI. Here's my diff.");
   });
 
-  it('does not call raw totals partial just because file inspection was incomplete', () => {
-    const raw: ShareResult = { ...result, fileFilter: {
-      enabled: false, excludedBefore: { additions: 0, deletions: 0 }, excludedAfter: { additions: 0, deletions: 0 },
-      inspectedCommits: 817, uninspectedBefore: { additions: 10, deletions: 0, commits: 1 }, uninspectedAfter: { additions: 0, deletions: 0, commits: 0 },
-    } };
-    expect(new URL(createXPostUrl(raw, resultUrl)).searchParams.get('text')).not.toContain('partial');
+  it.each([[0, 0], [0, 100], [100, 0], [100, 25]])('stays neutral when before/after totals are %i/%i', (before, after) => {
+    const snapshot: ShareResult = { ...result,
+      before: { ...result.before, additions: before }, after: { ...result.after, additions: after },
+    };
+    const caption = new URL(createXPostUrl(snapshot, resultUrl, true)).searchParams.get('text');
+    expect(caption).toBe("I checked my GitHub before and after I started coding with AI. Here's my diff.");
+    expect(caption).not.toMatch(/\d|partial|private|repos|handwritten|generated|productive|faster|more|less/i);
   });
 
   it('supports local HTTP preview origins', () => {

@@ -86,7 +86,7 @@ describe('oversized commit filtering', () => {
     }
   });
 
-  it('prints the same filter disclosure and counted totals in the share image', async () => {
+  it('exports counted totals without filter labels while preserving the text summary', async () => {
     const labels: string[] = [];
     const context = { fillStyle: '', font: '', fillRect: vi.fn(), beginPath: vi.fn(), roundRect: vi.fn(), fill: vi.fn(), measureText: (value: string) => ({ width: value.length * 8 }), fillText: (value: string) => labels.push(value) };
     vi.stubGlobal('document', { fonts: { ready: Promise.resolve() }, createElement: () => ({ getContext: () => context, toBlob: (callback: (value: Blob) => void) => callback(new Blob(['image'], { type: 'image/png' })) }) });
@@ -95,7 +95,8 @@ describe('oversized commit filtering', () => {
       await renderShareImage(snapshot);
       expect(labels).toContain('25');
       expect(labels).not.toContain('7,000,025');
-      expect(labels.some(label => label.includes('1 commit excluded'))).toBe(true);
+      expect(labels.some(label => /excluded|private|complete|partial/i.test(label))).toBe(false);
+      expect(createShareText(snapshot)).toContain('1 commit excluded');
     } finally { vi.unstubAllGlobals(); }
   });
 });

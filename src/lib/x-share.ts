@@ -1,9 +1,7 @@
 import { isShareResult } from '../../shared/share-validation';
 import type { ShareResult } from '../../shared/types';
 
-const number = new Intl.NumberFormat('en-US');
-
-export function createXPostUrl(result: ShareResult, resultUrl: string): string {
+export function createXPostUrl(result: ShareResult, resultUrl: string, ownResult = false): string {
   if (!isShareResult(result)) throw new Error('Create a valid result before sharing on X.');
   let link: URL;
   try {
@@ -13,10 +11,11 @@ export function createXPostUrl(result: ShareResult, resultUrl: string): string {
       || !/^\/s\/(?:[A-Za-z0-9_-]{16}|sample-(?:light|dark))$/.test(link.pathname)) throw new Error();
   } catch { throw new Error('Create a public result link before sharing on X.'); }
 
-  const unknownFiles = result.fileFilter?.enabled
-    ? result.fileFilter.uninspectedBefore.commits + result.fileFilter.uninspectedAfter.commits : 0;
-  const partial = result.coverage.incomplete > 0 || result.coverage.unavailable > 0 || unknownFiles > 0;
-  const caption = `${result.sample ? 'Sample GitHub' : 'GitHub'}, before and after AI: ${number.format(result.before.additions)} → ${number.format(result.after.additions)} lines added.${partial ? ' (partial history)' : ''}`;
+  const caption = result.sample
+    ? 'A sample AI diff. Code before and after AI.'
+    : ownResult
+      ? "I checked my GitHub before and after I started coding with AI. Here's my diff."
+      : `Here's @${result.login}'s AI diff. Code before and after AI.`;
   const intent = new URL('https://x.com/intent/tweet');
   intent.search = new URLSearchParams({ text: caption, url: link.href }).toString();
   return intent.href;

@@ -11,7 +11,7 @@ type ShareAction = 'image' | 'text' | 'link' | 'fallback' | 'publish' | 'x';
 type ImagePreview = { resultKey: string; theme: ShareImageTheme; blob: Blob; url: string };
 type LinkCache = { resultKey: string; links: Partial<Record<ShareImageTheme, PublishedShare>> };
 
-export default function ShareDialog({ result, close, publishedShare }: { result: ShareResult; close: () => void; publishedShare?: PublishedShare }) {
+export default function ShareDialog({ result, close, publishedShare, ownResult = false }: { result: ShareResult; close: () => void; publishedShare?: PublishedShare; ownResult?: boolean }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const generation = useRef(0);
   const actionPending = useRef(false);
@@ -21,6 +21,7 @@ export default function ShareDialog({ result, close, publishedShare }: { result:
   const [preview, setPreview] = useState<ImagePreview | null>(null);
   const [notice, setNotice] = useState(''), [error, setError] = useState('');
   const [xPostUrl, setXPostUrl] = useState('');
+  const [moreOptions, setMoreOptions] = useState(false);
   const [action, setAction] = useState<ShareAction | null>(null);
   const [imageTheme, setImageTheme] = useState<ShareImageTheme>(() => publishedShare?.imageTheme ?? getTheme());
   const [cache, setCache] = useState<LinkCache>(() => ({
@@ -53,6 +54,7 @@ export default function ShareDialog({ result, close, publishedShare }: { result:
     actionPending.current = false;
     setAction(null);
     setXPostUrl('');
+    setMoreOptions(false);
     setCache({ resultKey, links: publishedShare ? { [publishedShare.imageTheme]: publishedShare } : {} });
     setImageTheme(publishedShare?.imageTheme ?? getTheme());
     return () => {
@@ -76,7 +78,10 @@ export default function ShareDialog({ result, close, publishedShare }: { result:
       imageUrl = URL.createObjectURL(value);
       setPreview({ resultKey, theme: imageTheme, blob: value, url: imageUrl });
     }).catch(() => {
-      if (generation.current === run) setError('The image could not be created. Try another theme, or use the text or link without upload below.');
+      if (generation.current === run) {
+        setMoreOptions(true);
+        setError('The image could not be created. Try another theme, or use the text or link below.');
+      }
     });
     return () => {
       generation.current += 1;
@@ -128,9 +133,10 @@ export default function ShareDialog({ result, close, publishedShare }: { result:
       await navigator.clipboard.writeText(value);
       if (generation.current === run) setNotice(kind === 'text' ? 'Text copied.' : 'Link copied without uploading the image.');
     } catch {
-      if (generation.current === run) setError(kind === 'text'
-        ? 'Clipboard access was blocked. Expand Share text below to select and copy it.'
-        : 'Clipboard access was blocked. Select and copy the Link without upload field below.');
+      if (generation.current === run) {
+        setMoreOptions(true);
+        setError('Clipboard access was blocked. Select and copy the text below.');
+      }
     } finally {
       if (generation.current === run) { actionPending.current = false; setAction(null); }
     }
@@ -160,7 +166,7 @@ export default function ShareDialog({ result, close, publishedShare }: { result:
       }
       if (!readyLink || generation.current !== run) return;
       if (destination === 'x') {
-        const intent = createXPostUrl(result, readyLink.url);
+        const intent = createXPostUrl(result, readyLink.url, ownResult);
         if (xWindow?.open(intent)) {
           setNotice('X opened with your caption and result link.');
         } else {
@@ -170,14 +176,18 @@ export default function ShareDialog({ result, close, publishedShare }: { result:
       } else {
         try {
           await navigator.clipboard.writeText(readyLink.url);
-          if (generation.current === run) setNotice('Result link copied. Its totals and image are public.');
+          if (generation.current === run) setNotice('Link copied.');
         } catch {
-          if (generation.current === run) setNotice('Link ready. Select the Result link field below to copy it.');
+          if (generation.current === run) {
+            setMoreOptions(true);
+            setNotice('Link ready. Select and copy it below.');
+          }
         }
       }
     } catch (reason) {
       if (generation.current === run && !controller?.signal.aborted) {
         const message = reason instanceof Error ? reason.message : 'The link could not be created.';
+        setMoreOptions(true);
         setError(/PNG|without upload/i.test(message) ? message : `${message} You can still download the PNG or use Link without upload below.`);
       }
     } finally {
@@ -222,8 +232,7 @@ export default function ShareDialog({ result, close, publishedShare }: { result:
         <button className="button secondary sd-secondary-action sd-copy-image" disabled={!blob || busy} onClick={() => void copyImage()} aria-keyshortcuts="Meta+Shift+C Control+Shift+C" title="Copy image (⌘/Ctrl + Shift + C)">
           <Copy size={15} /><span>{action === 'image' ? 'Copying…' : 'Copy image'}</span>
         </button>
-        <button className="button secondary sd-secondary-action" aria-label="Download PNG" disabled={!blob || busy} onClick={() => { if (blob) { downloadShareImage(blob); setNotice('PNG downloaded.'); setError(''); } }}>PNG</button>
-        <button className="button secondary sd-secondary-action" aria-label="Copy text" disabled={busy} onClick={() => void copyTextValue(shareText, 'text')}>{action === 'text' ? 'Copying…' : 'Text'}</button>
+        <button className="button secondary sd-secondary-action" aria-label="Download PNG" disabled={!blob || busy} onClick={() => { if (blob) { downloadShareImage(blob); setNotice('PNG downloaded.'); setError(''); } }}>Download</button>
         <button className="link-button sd-link-action sd-create-link" disabled={busy || (!currentLink && !blob)} onClick={() => void shareLink('copy')}>
           {action === 'publish' ? 'Creating link…' : action === 'link' ? 'Copying…' : currentLink ? 'Copy link' : 'Create link'}
         </button>
@@ -232,31 +241,32 @@ export default function ShareDialog({ result, close, publishedShare }: { result:
         </button>
       </div>
 
-      <p className="sd-sharing-note">Create link and Post on X make these totals and this image public. No code or repository names are included.</p>
+      <p className="sd-sharing-note">Links share your totals and image publicly. Code and repo names stay private.</p>
 
       {error && <p className="sd-feedback sd-error" role="alert">{error}</p>}
       {notice && <p className="sd-feedback sd-success" role="status"><Check size={17} aria-hidden="true" /><span>{notice}</span></p>}
       {xPostUrl && <a className="sd-open-x" href={xPostUrl} target="_blank" rel="noopener noreferrer">Open X</a>}
 
-      {currentLink && <label className="sd-result-link">
-        <span>Result link</span>
-        <input id="sd-result-link" aria-label="Result link" className="sd-copy-field" readOnly value={currentLink.url} onFocus={event => event.target.select()} />
-      </label>}
-
-      <div className="sd-fallbacks">
-        <details className="sd-details">
-          <summary>Link without upload</summary>
-          <div className="sd-details-content">
-            <p className="sd-field-note">This long link keeps the totals in its URL. It does not upload an image or provide a personalized social preview.</p>
+      <details className="sd-details sd-more-options" open={moreOptions} onToggle={event => setMoreOptions(event.currentTarget.open)}>
+        <summary>More options</summary>
+        <div className="sd-details-content">
+          {currentLink && <label className="sd-option">
+            <span>Result link</span>
+            <input id="sd-result-link" aria-label="Result link" className="sd-copy-field" readOnly value={currentLink.url} onFocus={event => event.target.select()} />
+          </label>}
+          <div className="sd-option">
+            <label htmlFor="sd-share-text">Text summary</label>
+            <textarea id="sd-share-text" aria-label="Share text" className="sd-copy-field sd-text-field" rows={5} readOnly value={shareText} onFocus={event => event.target.select()} />
+            <button className="link-button sd-fallback-copy" disabled={busy} onClick={() => void copyTextValue(shareText, 'text')}>{action === 'text' ? 'Copying…' : 'Copy text'}</button>
+          </div>
+          <div className="sd-option">
+            <label htmlFor="sd-fallback-link">Link without upload</label>
+            <p className="sd-field-note">A longer link, without an image preview.</p>
             <input id="sd-fallback-link" aria-label="Link without upload" className="sd-copy-field" readOnly value={fallbackUrl} onFocus={event => event.target.select()} />
             <button className="link-button sd-fallback-copy" disabled={busy} onClick={() => void copyTextValue(fallbackUrl, 'fallback')}>Copy link without upload</button>
           </div>
-        </details>
-        <details className="sd-details">
-          <summary>Share text</summary>
-          <div className="sd-details-content"><textarea id="sd-share-text" aria-label="Share text" className="sd-copy-field sd-text-field" rows={8} readOnly value={shareText} onFocus={event => event.target.select()} /></div>
-        </details>
-      </div>
+        </div>
+      </details>
     </div>
   </dialog>;
 }
