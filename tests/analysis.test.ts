@@ -15,6 +15,13 @@ describe('commit analysis', () => {
     expect(result.before).toEqual({ additions: 5, deletions: 2, commits: 1 });
   });
 
+  it('does not infer primary authorship from coauthors, committer identity, or an empty user ID', () => {
+    const other = { ...commit('other', '2025-01-01T00:00:00Z', 9000, { authorId: 'someone-else' }), coauthorIds: ['dev'], committerId: 'dev' };
+    expect(analyze([other]).before.commits).toBe(0);
+    const unidentified = commit('unidentified', '2025-01-01T00:00:00Z', 9000, { authorId: '' });
+    expect(analyzeCommits([unidentified], '', '2025-09-29', '2026-01-01T00:00:00Z', progress).before.commits).toBe(0);
+  });
+
   it('uses the UTC midnight boundary with before exclusive and after inclusive', () => {
     const result = analyze([
       commit('before', '2025-09-28T23:59:59.999Z', 10),

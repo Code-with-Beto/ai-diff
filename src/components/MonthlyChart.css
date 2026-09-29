@@ -71,7 +71,7 @@
   background: repeating-linear-gradient(135deg, var(--chart-before) 0 1px, transparent 1px 3px);
 }
 
-.monthly-chart__swatch--after { background: var(--text); }
+.monthly-chart__swatch--after { background: var(--accent); }
 .monthly-chart__cutoff-key { margin-left: auto; }
 .monthly-chart__cutoff-key > i { width: 12px; border-top: 1px dashed var(--muted); }
 
@@ -107,7 +107,7 @@
 .monthly-chart__grid { stroke: var(--line); stroke-width: 1px; stroke-dasharray: 2 4; }
 .monthly-chart__highlight { fill: var(--text); opacity: .06; }
 .monthly-chart__bar--before { fill: var(--chart-before); }
-.monthly-chart__bar--after { fill: var(--text); }
+.monthly-chart__bar--after { fill: var(--accent); }
 .monthly-chart__pattern { stroke: var(--bg); stroke-width: 2px; opacity: .5; }
 .monthly-chart__cutoff { stroke: var(--muted); stroke-width: 1px; stroke-dasharray: 4 4; }
 

@@ -12,20 +12,23 @@ export default function About() {
         <section id="the-numbers" aria-labelledby="numbers-heading">
           <h2 id="numbers-heading">What it measures</h2>
           <p>We count <strong>lines added in commits</strong> you authored, including code, documentation, lockfiles, generated text, and repeated edits. Add a line, delete it, and add it again: both additions count.</p>
+          <p>Imported projects, templates, generated files, and lockfiles can inflate additions even when GitHub matches the commit’s primary author to your account. A root commit can add an existing codebase in one step; author matching does not prove that you wrote every line.</p>
+          <p>By default, we skip entire commits with more than 100,000 added and deleted lines combined, using the same rule before and after your date. A short notice links to excluded totals and the largest commits. You can turn the filter off without rescanning. Filter options also include a before-only scope, labeled as an unequal filter.</p>
+          <p>This is a size heuristic, not file-level filtering. Smaller commits can still contain generated code, and large legitimate commits may be excluded. Shared images and links disclose the filter and exclusion count.</p>
           <p>This measures commit activity. It cannot identify which lines AI wrote, measure code quality, or tell you how productive you were. A smaller number can be a good thing.</p>
         </section>
 
         <section id="methodology" aria-labelledby="methodology-heading">
           <h2 id="methodology-heading">How we count</h2>
-          <p>For each selected repository, we snapshot the default branch’s latest commit and walk its history. Each scan has a fixed end time. We count commits whose primary author GitHub associates with your account, exclude merge commits, and count identical commit SHAs only once across repositories.</p>
+          <p>For each selected repository, we snapshot the default branch’s latest commit and walk its history. Each scan has a fixed end time. A commit counts only when GitHub associates its primary author with your connected account. We exclude merge commits and deduplicate identical commit SHAs across repositories. Forked repositories are excluded entirely.</p>
           <p>Your comparison date divides commits at <strong>midnight UTC</strong>. We use the commit timestamp: earlier commits go in “before,” and commits at or after it go in “after.” You can change the date after a scan without fetching the history again.</p>
-          <p>The two periods may be different lengths, so we show their date ranges alongside the totals. The ratio compares total additions, not productivity. Deletions and net change provide more context.</p>
+          <p>The two periods may be different lengths, so we show their date ranges alongside the totals. The percentage compares total additions, not productivity. Deletions and net change provide more context.</p>
         </section>
 
         <section id="coverage" aria-labelledby="coverage-heading">
           <h2 id="coverage-heading">Coverage and limitations</h2>
           <p>Results cover <strong>selected GitHub repository history</strong>, not your entire career. Deleted or inaccessible repositories, work outside the default branch, uncommitted work, and old author identities that GitHub cannot connect to your account can be missing. Co-author credits do not count as primary authorship.</p>
-          <p>Discovery includes your owned public repositories and repositories GitHub lists as recently contributed to. You can also add a public repository by URL. Archived repositories are included; forks start unchecked. Organization policies may limit private access even after installation.</p>
+          <p>Discovery includes your owned public repositories and repositories GitHub lists as recently contributed to. You can also add a public repository by URL. Archived repositories are included. Forks are excluded from discovery, manual additions, and analysis. Organization policies may limit private access even after installation.</p>
           <p>Every result shows completed, unavailable, and incomplete repositories. A cancelled or interrupted scan is a partial result. Large histories can take longer, and GitHub’s API limits may temporarily pause a scan.</p>
         </section>
 

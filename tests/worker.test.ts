@@ -4,6 +4,7 @@ import type { Env } from '../worker/index';
 import type { ScanPage } from '../shared/types';
 import { externalFetch } from '../worker/github';
 import { challenge, cookieName, seal, unseal, verify } from '../worker/security';
+import { analyzeCommits } from '../src/lib/analysis';
 
 const env: Env = {
   APP_ORIGIN: 'https://aidiff.example.com', GITHUB_APP_SLUG: 'ai-diff-test', GITHUB_CLIENT_ID: 'Iv1.test', GITHUB_CLIENT_SECRET: 'test-client-secret',
@@ -21,6 +22,11 @@ const apiResponse = (body: unknown, status = 200, headers: Record<string, string
 const request = (path: string, options: RequestInit = {}) => new Request(`${env.APP_ORIGIN}${path}`, options);
 const authenticated = (path: string, options: RequestInit = {}) => request(path, { ...options, headers: { Cookie: sessionCookie, ...options.headers } });
 const post = (path: string, input: unknown, headers: Record<string, string> = {}) => authenticated(path, { method: 'POST', headers: { Origin: env.APP_ORIGIN, 'x-csrf-token': csrf, 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(input) });
+const historyCommit = (oid: string, authorId: string | null = viewer.id) => ({ oid, additions: 20, deletions: 3, committedDate: '2025-12-01T00:00:00Z', author: { user: authorId === null ? null : { id: authorId } }, parents: { totalCount: 1 } });
+const historyResponse = (nodes: unknown[], endCursor: string | null = null, overrides = {}) => apiResponse({ data: {
+  node: { isPrivate: false, isFork: false, object: { history: { nodes, pageInfo: { hasNextPage: endCursor !== null, endCursor } } }, ...overrides },
+  rateLimit: { remaining: 4500, resetAt: '2026-01-01T01:00:00Z' },
+} });
 
 async function createSession(overrides: Record<string, unknown> = {}) {
   return seal(env, 'session', { version: 1, sessionId: 'session-one', user: viewer, token: 'ghu_test-token', csrfToken: csrf, expiresAt: Math.floor(Date.now() / 1000) + 3600, ...overrides });
@@ -202,6 +208,17 @@ describe('repository pagination', () => {
     const query = JSON.parse(String(githubFetch.mock.calls[0][1]?.body));
     expect(query.variables.after).toBe('current');
     expect(query.query).toContain('privacy: PUBLIC');
+    expect(query.query).toContain('isFork: false');
+  });
+
+  it.each(['owned', 'contributed'])('excludes forks from %s discovery while preserving a fork-only page cursor', async (kind) => {
+    const field = kind === 'owned' ? 'repositories' : 'repositoriesContributedTo';
+    githubFetch.mockResolvedValueOnce(apiResponse({ data: { viewer: { [field]: { nodes: [{ ...repository, isFork: true }], pageInfo: { hasNextPage: true, endCursor: 'next-page' } } } } }));
+    const first = await worker.fetch(authenticated(`/api/github/repositories?kind=${kind}`), env);
+    expect(await first.json()).toEqual({ repositories: [], hasNextPage: true, cursor: 'next-page' });
+    githubFetch.mockResolvedValueOnce(apiResponse({ data: { viewer: { [field]: { nodes: [repository, { ...repository, id: 'fork', isFork: true }], pageInfo: { hasNextPage: false, endCursor: null } } } } }));
+    const next = await worker.fetch(authenticated(`/api/github/repositories?kind=${kind}&cursor=next-page`), env);
+    expect(await next.json()).toEqual({ repositories: [repository], hasNextPage: false, cursor: null });
   });
 
   it('uses user-installation repository access, follows REST pagination, and normalizes fields', async () => {
@@ -210,6 +227,69 @@ describe('repository pagination', () => {
     expect(githubFetch.mock.calls[0][0]).toBe('https://api.github.com/user/installations/42/repositories?per_page=100&page=2');
     expect(await response.json()).toEqual({ repositories: [{ ...repository, isPrivate: true, isArchived: true }], hasNextPage: true, cursor: '3' });
   });
+
+  it('excludes public and private installation forks without losing REST pagination', async () => {
+    const base = { node_id: repository.id, full_name: repository.nameWithOwner, private: true, fork: false, archived: false, description: null };
+    githubFetch.mockResolvedValueOnce(apiResponse({ repositories: [{ ...base, fork: true }, { ...base, private: false, fork: true }] }, 200, { link: '<https://api.github.com/user/installations/42/repositories?page=2>; rel="next"' }));
+    const first = await worker.fetch(authenticated('/api/github/repositories?kind=installation&installationId=42'), env);
+    expect(await first.json()).toEqual({ repositories: [], hasNextPage: true, cursor: '2' });
+    githubFetch.mockResolvedValueOnce(apiResponse({ repositories: [{ ...base, node_id: 'fork', fork: true }, base] }));
+    const next = await worker.fetch(authenticated('/api/github/repositories?kind=installation&installationId=42&cursor=2'), env);
+    expect(await next.json()).toEqual({ repositories: [{ ...repository, isPrivate: true }], hasNextPage: false, cursor: null });
+  });
+
+  it('refuses discovery with unknown fork status instead of admitting unchecked repositories', async () => {
+    githubFetch.mockResolvedValueOnce(apiResponse({ data: { viewer: { repositories: { nodes: [{ ...repository, isFork: undefined }], pageInfo: { hasNextPage: false, endCursor: null } } } } }));
+    const response = await worker.fetch(authenticated('/api/github/repositories?kind=owned'), env);
+    expect(response.status).toBe(502);
+    expect(await response.json()).toMatchObject({ error: { code: 'github_incomplete' } });
+  });
+});
+
+describe('fork policy at direct API boundaries', () => {
+  it.each([false, true])('rejects a manually added fork even with valid repository access (private=%s)', async (isPrivate) => {
+    githubFetch.mockResolvedValueOnce(apiResponse({ data: { repository: { ...repository, isFork: true, isPrivate } } }));
+    const response = await worker.fetch(post('/api/github/repository', { url: 'https://github.com/beto/project' }), env);
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ error: { code: 'forks_excluded' } });
+  });
+
+  it.each([false, true])('rejects a fork snapshot before issuing any handle, including empty repos (empty=%s)', async (empty) => {
+    githubFetch.mockResolvedValueOnce(apiResponse({ data: { node: { ...repository, isFork: true, defaultBranchRef: empty ? null : { target: { oid: headOid } } } } }));
+    const response = await worker.fetch(post('/api/scan/start', { repositoryId: repository.id, includePrivate: true, asOf: '2026-01-01T00:00:00Z' }), env);
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ error: { code: 'forks_excluded' } });
+  });
+
+  it('rejects a repository that becomes a fork after its signed snapshot', async () => {
+    const { handle } = await start();
+    githubFetch.mockResolvedValueOnce(historyResponse([historyCommit('would-be-counted')], null, { isFork: true }));
+    const response = await worker.fetch(post('/api/scan/page', { handle }), env);
+    expect(response.status).toBe(403);
+    const body = await response.json();
+    expect(body).toMatchObject({ error: { code: 'forks_excluded' } });
+    expect(body).not.toHaveProperty('commits');
+    const query = JSON.parse(String(githubFetch.mock.calls[1][1]?.body));
+    expect(query.query).toContain('isFork');
+  });
+
+  it.each(['/api/github/repository', '/api/scan/start', '/api/scan/page'])('fails closed when %s cannot confirm fork status', async (path) => {
+    let input: Record<string, unknown>;
+    if (path.endsWith('/page')) {
+      const { handle } = await start();
+      input = { handle };
+      githubFetch.mockResolvedValueOnce(historyResponse([], null, { isFork: undefined }));
+    } else if (path.endsWith('/start')) {
+      input = { repositoryId: repository.id, includePrivate: false, asOf: '2026-01-01T00:00:00Z' };
+      githubFetch.mockResolvedValueOnce(apiResponse({ data: { node: { ...repository, isFork: undefined, defaultBranchRef: null } } }));
+    } else {
+      input = { url: 'https://github.com/beto/project' };
+      githubFetch.mockResolvedValueOnce(apiResponse({ data: { repository: { ...repository, isFork: undefined } } }));
+    }
+    const response = await worker.fetch(post(path, input), env);
+    expect(response.status).toBe(502);
+    expect(await response.json()).toMatchObject({ error: { code: 'github_incomplete' } });
+  });
 });
 
 describe('signed scan pages', () => {
@@ -217,7 +297,7 @@ describe('signed scan pages', () => {
     const { handle } = await start();
     const first = await verify<Record<string, unknown>>(env, 'scan-page', handle!);
     expect(first).toMatchObject({ repositoryNodeId: repository.id, headOid, githubUserId: viewer.id, after: null, asOf: '2026-01-01T00:00:00.000Z' });
-    githubFetch.mockResolvedValueOnce(apiResponse({ data: { node: { isPrivate: false, object: { history: { nodes: [{ oid: 'b'.repeat(40), additions: 123, deletions: 12, committedDate: '2025-12-31T23:59:59Z', author: { user: { id: viewer.id } }, parents: { totalCount: 1 } }], pageInfo: { hasNextPage: true, endCursor: 'github-next' } } } }, rateLimit: { remaining: 4500, resetAt: '2026-01-01T01:00:00Z' } } }));
+    githubFetch.mockResolvedValueOnce(apiResponse({ data: { node: { isPrivate: false, isFork: false, object: { history: { nodes: [{ oid: 'b'.repeat(40), additions: 123, deletions: 12, committedDate: '2025-12-31T23:59:59Z', author: { user: { id: viewer.id } }, parents: { totalCount: 1 } }], pageInfo: { hasNextPage: true, endCursor: 'github-next' } } } }, rateLimit: { remaining: 4500, resetAt: '2026-01-01T01:00:00Z' } } }));
     const response = await worker.fetch(post('/api/scan/page', { handle, author: 'another-user', cursor: 'attacker-cursor' }), env);
     expect(response.status).toBe(200);
     const body = await response.json() as ScanPage;
@@ -226,6 +306,43 @@ describe('signed scan pages', () => {
     expect(next).toMatchObject({ headOid, after: 'github-next', asOf: first.asOf });
     const query = JSON.parse(String(githubFetch.mock.calls[1][1]?.body));
     expect(query.variables).toMatchObject({ head: headOid, author: viewer.id, after: null, until: first.asOf });
+    expect(query.query).toContain('author: {id: $author}');
+  });
+
+  it('returns only the signed-in primary author, not a coauthor, committer, or unlinked author', async () => {
+    const { handle } = await start();
+    githubFetch.mockResolvedValueOnce(historyResponse([
+      { ...historyCommit('primary'), committer: { user: { id: 'someone-else' } } },
+      { ...historyCommit('coauthor', 'someone-else'), authors: { nodes: [{ user: { id: 'someone-else' } }, { user: { id: viewer.id } }] } },
+      { ...historyCommit('committer', 'someone-else'), committer: { user: { id: viewer.id } } },
+      historyCommit('unlinked', null),
+      { ...historyCommit('no-author'), author: null },
+    ]));
+    const response = await worker.fetch(post('/api/scan/page', { handle, author: 'someone-else' }), env);
+    expect(response.status).toBe(200);
+    const data = await response.json() as ScanPage;
+    expect(data.commits.map(commit => commit.oid)).toEqual(['primary']);
+    expect(data.commits[0].authorId).toBe(viewer.id);
+    expect(data.nextHandle).toBeNull();
+  });
+
+  it('continues after an author-filtered empty page and counts overlapping or replayed pages only once', async () => {
+    const { handle } = await start();
+    githubFetch.mockResolvedValueOnce(historyResponse([historyCommit('other', 'another-user')], 'page-two'));
+    const first = await (await worker.fetch(post('/api/scan/page', { handle }), env)).json() as ScanPage;
+    expect(first.commits).toEqual([]);
+    expect(first.nextHandle).toBeTruthy();
+    githubFetch.mockResolvedValueOnce(historyResponse([historyCommit('same')], 'page-three'));
+    const second = await (await worker.fetch(post('/api/scan/page', { handle: first.nextHandle }), env)).json() as ScanPage;
+    githubFetch.mockResolvedValueOnce(historyResponse([historyCommit('same'), historyCommit('new')]));
+    const third = await (await worker.fetch(post('/api/scan/page', { handle: second.nextHandle }), env)).json() as ScanPage;
+    githubFetch.mockResolvedValueOnce(historyResponse([historyCommit('same')], 'page-three'));
+    const replay = await (await worker.fetch(post('/api/scan/page', { handle: first.nextHandle }), env)).json() as ScanPage;
+    const result = analyzeCommits([...first.commits, ...second.commits, ...third.commits, ...replay.commits], viewer.id, '2025-09-29', '2026-01-01T00:00:00Z', [{ repository, status: 'complete', commits: 4 }]);
+    expect(result.after).toEqual({ additions: 40, deletions: 6, commits: 2 });
+    expect(third.nextHandle).toBeNull();
+    const nextQuery = JSON.parse(String(githubFetch.mock.calls[2][1]?.body));
+    expect(nextQuery.variables.after).toBe('page-two');
   });
 
   it('rejects altered handles before querying GitHub', async () => {
@@ -252,7 +369,7 @@ describe('signed scan pages', () => {
 
   it('rejects a formerly public repository that becomes private mid-scan', async () => {
     const { handle } = await start();
-    githubFetch.mockResolvedValueOnce(apiResponse({ data: { node: { isPrivate: true, object: { history: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } } }, rateLimit: { remaining: 4500, resetAt: '2026-01-01T01:00:00Z' } } }));
+    githubFetch.mockResolvedValueOnce(apiResponse({ data: { node: { isPrivate: true, isFork: false, object: { history: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } } }, rateLimit: { remaining: 4500, resetAt: '2026-01-01T01:00:00Z' } } }));
     const response = await worker.fetch(post('/api/scan/page', { handle }), env);
     expect(response.status).toBe(403);
     expect(await response.json()).toMatchObject({ error: { code: 'repository_visibility_changed' } });

@@ -25,7 +25,11 @@ Free to use, open source, and designed to run without a database or an AI API bi
 
 AI Diff measures **lines added in commits**, including documentation, lockfiles, generated text, and repeated edits. Add a line, delete it, and add it again: both additions count. These numbers describe commit activity; they cannot identify AI authorship, measure code quality, or establish a productivity increase.
 
-For each selected repository, AI Diff snapshots the default branch and reads its commit history. It counts primary-authored commits associated with your GitHub account, excludes merge commits, and deduplicates identical commit SHAs across repositories. The cutoff is midnight UTC on your chosen date, using the commit timestamp.
+For each selected repository, AI Diff snapshots the default branch and reads its commit history. A commit counts only when GitHub associates its primary author with your connected account. Merge commits are excluded, and identical commit SHAs are deduplicated across repositories. **Forked repositories are excluded entirely**, including discovery, manual additions, and analysis. The cutoff is midnight UTC on your chosen date, using the commit timestamp.
+
+Imported projects, templates, generated files, and lockfiles can inflate additions even when the primary author matches your account. A root commit can add an existing codebase in one step. Author matching does not establish who originally wrote each line.
+
+The calculation skips commits with **more than 100,000 added and deleted lines combined** by default, using the same rule in both periods. A short notice links to excluded totals and an audit of the largest commits. Turn off **Skip oversized commits** to restore them instantly, or open **Options** and choose **Before only (unequal filter)**. Shared images, text, and links retain the filter and exclusion count. This is a whole-commit size heuristic, not file-level dependency detection: a large legitimate commit may be excluded, and smaller commits can still contain generated code. It requires no additional GitHub requests.
 
 Results cover **selected GitHub repository history**, not your entire career. Deleted or inaccessible repositories, old unlinked author identities, work outside default branches, and uncommitted work can be missing. The two periods may have different lengths, so their dates and coverage stay visible alongside the totals.
 
@@ -33,7 +37,7 @@ The default date is [November 24, 2025, the Opus 4.5 release](https://www.anthro
 
 ## Keyboard shortcuts and themes
 
-AI Diff uses your system theme by default. The header toggle or **T** switches between light and dark mode and remembers your choice on this device. The interface and exported images use only black, white, and gray.
+AI Diff uses your system theme by default. The header toggle or **T** switches between light and dark mode and remembers your choice on this device. The interface and exported images pair a grayscale base with Sky 500 in light mode and Sky 400 in dark mode. Exported images use Sky 400 on black.
 
 | Shortcut | Action |
 | --- | --- |

@@ -1,7 +1,18 @@
-import type { AnalysisResult, CommitRecord, MonthTotal, RepositoryProgress, Totals } from '../../shared/types.ts';
+import type { AnalysisResult, CommitFilterSummary, CommitRecord, MonthTotal, RepositoryProgress, Totals } from '../../shared/types.ts';
 
 const emptyTotals = (): Totals => ({ additions: 0, deletions: 0, commits: 0 });
 const integer = (value: number) => Number.isSafeInteger(value) && value >= 0;
+export const OVERSIZED_COMMIT_THRESHOLD = 100_000;
+export interface CommitFilterOptions { enabled?: boolean; scope?: 'both' | 'before' }
+
+function addCommit(totals: Totals, commit: CommitRecord): void {
+  totals.additions += commit.additions;
+  totals.deletions += commit.deletions;
+  totals.commits += 1;
+  if (!Number.isSafeInteger(totals.additions) || !Number.isSafeInteger(totals.deletions)) {
+    throw new Error('This history is too large to total safely.');
+  }
+}
 
 export function isDateOnly(value: string): boolean {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
@@ -15,6 +26,7 @@ export function analyzeCommits(
   cutoff: string,
   asOf: string,
   progress: RepositoryProgress[],
+  filter: CommitFilterOptions = {},
 ): AnalysisResult {
   const end = Date.parse(asOf);
   if (!isDateOnly(cutoff) || !Number.isFinite(end)) throw new Error('Choose a valid comparison date.');
@@ -23,25 +35,34 @@ export function analyzeCommits(
   const after = emptyTotals();
   const seen = new Set<string>();
   const monthly = new Map<string, MonthTotal>();
+  const oversizedCommits: CommitRecord[] = [];
+  const commitFilter: CommitFilterSummary = {
+    enabled: filter.enabled ?? true, scope: filter.scope ?? 'both', threshold: OVERSIZED_COMMIT_THRESHOLD,
+    excludedBefore: emptyTotals(), excludedAfter: emptyTotals(),
+  };
   let first = Infinity;
 
   for (const commit of commits) {
     const date = Date.parse(commit.committedDate);
     if (
-      !commit.oid || seen.has(commit.oid) || commit.authorId !== userId ||
+      !userId || !commit.oid || seen.has(commit.oid) || commit.authorId !== userId ||
       !Number.isInteger(commit.parentCount) || commit.parentCount < 0 || commit.parentCount > 1 ||
       !integer(commit.additions) || !integer(commit.deletions) || !Number.isFinite(date) || date > end
     ) continue;
     seen.add(commit.oid);
-    first = Math.min(first, date);
     const period = date < boundary ? 'before' : 'after';
-    const totals = period === 'before' ? before : after;
-    totals.additions += commit.additions;
-    totals.deletions += commit.deletions;
-    totals.commits += 1;
-    if (!Number.isSafeInteger(totals.additions) || !Number.isSafeInteger(totals.deletions)) {
-      throw new Error('This history is too large to total safely.');
+    // A size heuristic, not proof of dependencies, generated files, or authorship.
+    // Check after author/merge validation and SHA deduplication, before any totals.
+    if (commit.additions > OVERSIZED_COMMIT_THRESHOLD - commit.deletions) {
+      oversizedCommits.push(commit);
+      if (commitFilter.enabled && (commitFilter.scope === 'both' || period === 'before')) {
+        addCommit(period === 'before' ? commitFilter.excludedBefore : commitFilter.excludedAfter, commit);
+        continue;
+      }
     }
+    first = Math.min(first, date);
+    const totals = period === 'before' ? before : after;
+    addCommit(totals, commit);
     const month = new Date(date).toISOString().slice(0, 7);
     const bin = monthly.get(month) ?? { month, before: 0, after: 0 };
     bin[period] += commit.additions;
@@ -74,7 +95,7 @@ export function analyzeCommits(
   }
 
   return {
-    before, after, months, cutoff, asOf: new Date(end).toISOString(), coverage,
+    before, after, months, cutoff, asOf: new Date(end).toISOString(), coverage, commitFilter, oversizedCommits,
     firstCommitAt: Number.isFinite(first) ? new Date(first).toISOString() : null,
     includesPrivate: repositories.some(item => item.repository.isPrivate && item.status !== 'pending'),
     ratio: before.additions === 0 ? null : after.additions / before.additions,

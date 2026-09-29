@@ -1,4 +1,5 @@
 import type { CommitRecord, Installation, Repository, RepositoryPage, SessionInfo, Viewer } from '../shared/types';
+import { isNonForkRepository } from '../shared/repository-policy';
 import { ApiError, CONTRIBUTED_QUERY, externalFetch, github, OWNED_QUERY, PUBLIC_REPOSITORY_QUERY, SCAN_QUERY, SNAPSHOT_QUERY, VIEWER_QUERY } from './github';
 import { challenge, cookie, decode, origin, randomString, readCookie, seal, sign, unseal, verify } from './security';
 
@@ -21,7 +22,7 @@ interface PageInfo { hasNextPage: boolean; endCursor: string | null }
 interface RepoConnection { nodes: Repository[]; pageInfo: PageInfo }
 interface RestRepository { node_id: string; full_name: string; private: boolean; fork: boolean; archived: boolean; description: string | null }
 interface GithubCommit { oid: string; additions: number; deletions: number; committedDate: string; author: { user: { id: string } | null } | null; parents: { totalCount: number } }
-interface ScanData { node: { isPrivate: boolean; object: { history: { nodes: GithubCommit[]; pageInfo: PageInfo } } | null } | null; rateLimit: { remaining: number; resetAt: string } }
+interface ScanData { node: { isPrivate: boolean; isFork: boolean; object: { history: { nodes: GithubCommit[]; pageInfo: PageInfo } } | null } | null; rateLimit: { remaining: number; resetAt: string } }
 
 const now = () => Math.floor(Date.now() / 1000);
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' } });
@@ -95,12 +96,24 @@ function positiveInteger(value: string | null, fallback?: number): number {
 }
 
 function toRepository(value: RestRepository): Repository {
+  if (!value || typeof value.fork !== 'boolean') throw new ApiError(502, 'github_incomplete', 'GitHub could not confirm repository fork status. Please retry.');
   return { id: value.node_id, nameWithOwner: value.full_name, isPrivate: value.private, isFork: value.fork, isArchived: value.archived, description: value.description };
+}
+
+function nonForkRepositories(repositories: Repository[]): Repository[] {
+  if (!Array.isArray(repositories) || repositories.some(repository => !repository || typeof repository.isFork !== 'boolean')) throw new ApiError(502, 'github_incomplete', 'GitHub could not confirm repository fork status. Please retry.');
+  return repositories.filter(isNonForkRepository);
+}
+
+function requireNonForkRepository(repository: { isFork: boolean }): void {
+  if (typeof repository.isFork !== 'boolean') throw new ApiError(502, 'github_incomplete', 'GitHub could not confirm repository fork status. Please retry.');
+  if (!isNonForkRepository(repository)) throw new ApiError(403, 'forks_excluded', 'Forked repositories are excluded from AI Diff. Choose a non-fork repository.');
 }
 
 function repoPage(connection: RepoConnection): RepositoryPage {
   if (!connection || !Array.isArray(connection.nodes) || !connection.pageInfo || (connection.pageInfo.hasNextPage && !connection.pageInfo.endCursor)) throw new ApiError(502, 'github_incomplete', 'GitHub returned an incomplete repository list. Please retry.');
-  return { repositories: connection.nodes, cursor: connection.pageInfo.hasNextPage ? connection.pageInfo.endCursor : null, hasNextPage: connection.pageInfo.hasNextPage };
+  // Filtering a whole page to zero entries must not discard its next cursor.
+  return { repositories: nonForkRepositories(connection.nodes), cursor: connection.pageInfo.hasNextPage ? connection.pageInfo.endCursor : null, hasNextPage: connection.pageInfo.hasNextPage };
 }
 
 async function authStart(env: Env): Promise<Response> {
@@ -168,7 +181,8 @@ async function repositories(env: Env, session: Session, url: URL): Promise<Respo
     const page = positiveInteger(url.searchParams.get('cursor'), 1);
     const { data, response } = await github<{ repositories: RestRepository[] }>(session.token, `/user/installations/${installationId}/repositories?per_page=100&page=${page}`);
     const hasNextPage = /rel="next"/.test(response.headers.get('link') ?? '');
-    return json({ repositories: data.repositories.map(toRepository), hasNextPage, cursor: hasNextPage ? String(page + 1) : null } satisfies RepositoryPage);
+    if (!Array.isArray(data.repositories)) throw new ApiError(502, 'github_incomplete', 'GitHub returned an incomplete repository list. Please retry.');
+    return json({ repositories: nonForkRepositories(data.repositories.map(toRepository)), hasNextPage, cursor: hasNextPage ? String(page + 1) : null } satisfies RepositoryPage);
   }
   if (kind !== 'owned' && kind !== 'contributed') throw new ApiError(400, 'invalid_request', 'Choose an available repository list.');
   const cursor = url.searchParams.get('cursor');
@@ -183,7 +197,9 @@ async function manualRepository(session: Session, input: Record<string, unknown>
   const match = /^\/([A-Za-z0-9-]+)\/([A-Za-z0-9_.-]+)\/?$/.exec(target.pathname);
   if (target.protocol !== 'https:' || target.hostname !== 'github.com' || target.port || target.username || target.password || target.search || target.hash || !match) throw new ApiError(400, 'invalid_repository_url', 'Enter a public GitHub repository URL such as https://github.com/owner/repo.');
   const { data } = await github<{ repository: Repository | null }>(session.token, '/graphql', { query: PUBLIC_REPOSITORY_QUERY, variables: { owner: match[1], name: match[2].replace(/\.git$/, '') } });
-  if (!data.repository || data.repository.isPrivate) throw new ApiError(400, 'public_repository_required', 'Add public repositories here. Use the private repository picker for private access.');
+  if (!data.repository) throw new ApiError(400, 'public_repository_required', 'Add public repositories here. Use the private repository picker for private access.');
+  requireNonForkRepository(data.repository);
+  if (data.repository.isPrivate) throw new ApiError(400, 'public_repository_required', 'Add public repositories here. Use the private repository picker for private access.');
   return json({ repository: data.repository });
 }
 
@@ -195,6 +211,7 @@ async function startScan(env: Env, session: Session, input: Record<string, unkno
   if (typeof input.includePrivate !== 'boolean') throw new ApiError(400, 'invalid_request', 'Confirm which repositories to include.');
   const { data } = await github<{ node: (Repository & { defaultBranchRef: { target: { oid: string } } | null }) | null }>(session.token, '/graphql', { query: SNAPSHOT_QUERY, variables: { id } });
   if (!data.node?.id || !data.node.nameWithOwner) throw new ApiError(403, 'repository_unavailable', 'This repository is unavailable to your GitHub connection.');
+  requireNonForkRepository(data.node);
   if (data.node.isPrivate && !input.includePrivate) throw new ApiError(403, 'private_consent_required', 'Select private repositories explicitly before scanning them.');
   const { defaultBranchRef, ...repository } = data.node;
   if (!defaultBranchRef) return json({ handle: null, repository, empty: true });
@@ -210,14 +227,18 @@ async function scanPage(env: Env, session: Session, input: Record<string, unknow
     if (handle.version !== 1 || handle.purpose !== 'scan-page' || handle.sessionId !== session.sessionId || handle.githubUserId !== session.user.id || handle.expiresAt <= now() || !handle.repositoryNodeId || !handle.headOid || !handle.asOf) throw new Error();
   } catch { throw new ApiError(400, 'invalid_scan', 'This scan is expired or invalid. Start a new scan.'); }
   const { data } = await github<ScanData>(session.token, '/graphql', { query: SCAN_QUERY, variables: { id: handle.repositoryNodeId, head: handle.headOid, author: session.user.id, after: handle.after, until: handle.asOf } });
+  // Recheck live metadata, including handles issued before fork exclusion existed.
+  if (data.node) requireNonForkRepository(data.node);
   if (data.node?.isPrivate && !handle.isPrivate) throw new ApiError(403, 'repository_visibility_changed', 'This repository became private during the scan. Select it from your private repositories and start a new scan.');
   if (data.node && typeof data.node.isPrivate !== 'boolean') throw new ApiError(502, 'github_incomplete', 'GitHub could not confirm the repository visibility. Please retry this page.');
   const history = data.node?.object?.history;
   if (!history || !Array.isArray(history.nodes) || !history.pageInfo || (history.pageInfo.hasNextPage && (!history.pageInfo.endCursor || history.pageInfo.endCursor === handle.after))) throw new ApiError(502, 'github_incomplete', 'GitHub could not read this snapshot. Retry, or start a new scan.');
   const commits: CommitRecord[] = history.nodes.map((commit) => {
-    if (!commit?.oid || !Number.isSafeInteger(commit.additions) || commit.additions < 0 || !Number.isSafeInteger(commit.deletions) || commit.deletions < 0 || !Number.isSafeInteger(commit.parents?.totalCount) || !Number.isFinite(Date.parse(commit.committedDate))) throw new ApiError(502, 'github_incomplete', 'GitHub returned incomplete commit statistics. Please retry this page.');
+    if (!commit?.oid || !Number.isSafeInteger(commit.additions) || commit.additions < 0 || !Number.isSafeInteger(commit.deletions) || commit.deletions < 0 || !Number.isSafeInteger(commit.parents?.totalCount) || commit.parents.totalCount < 0 || !Number.isFinite(Date.parse(commit.committedDate))) throw new ApiError(502, 'github_incomplete', 'GitHub returned incomplete commit statistics. Please retry this page.');
     return { oid: commit.oid, additions: commit.additions, deletions: commit.deletions, committedDate: commit.committedDate, authorId: commit.author?.user?.id ?? null, parentCount: commit.parents.totalCount };
-  });
+  // Commit.author is the primary Git author. Commit.authors can also contain
+  // Co-authored-by trailers; being a coauthor or committer does not qualify.
+  }).filter(commit => commit.authorId === session.user.id);
   if (!data.rateLimit || !Number.isFinite(data.rateLimit.remaining) || !Number.isFinite(Date.parse(data.rateLimit.resetAt))) throw new ApiError(502, 'github_incomplete', 'GitHub returned incomplete rate-limit information. Please retry this page.');
   const nextHandle = history.pageInfo.hasNextPage ? await sign(env, 'scan-page', { ...handle, after: history.pageInfo.endCursor }) : null;
   return json({ commits, nextHandle, remaining: data.rateLimit.remaining, resetAt: data.rateLimit.resetAt });

@@ -116,7 +116,7 @@ export default function ShareDialog({ result, close }: { result: ShareResult; cl
         <div className="sd-secondary-actions" role="group" aria-label="More ways to share">
           <button className="button secondary sd-secondary-action" aria-label="Download PNG" disabled={!blob || !consent} onClick={() => { if (blob && consent) { downloadShareImage(blob); setNotice('PNG downloaded.'); } }}>PNG</button>
           <button className="button secondary sd-secondary-action" aria-label="Copy text" disabled={!consent} onClick={() => void copyText()}>Text</button>
-          <button className="button secondary sd-secondary-action" aria-label="Copy result link" disabled={!consent} onClick={() => void copyLink()}>Link</button>
+          <button className="link-button sd-link-action" aria-label="Copy result link" disabled={!consent} onClick={() => void copyLink()}>Link</button>
         </div>
       </div>
 

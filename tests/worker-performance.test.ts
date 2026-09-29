@@ -32,7 +32,7 @@ it.skipIf(process.env.WORKER_BENCHMARK !== '1')('reports local scan-page timing 
     author: { user: { id: user.id } }, parents: { totalCount: index % 13 === 0 ? 2 : 1 },
   }));
   const githubBody = JSON.stringify({ data: {
-    node: { isPrivate: false, object: { history: { nodes: commits, pageInfo: { hasNextPage: true, endCursor: 'benchmark-continuation-cursor' } } } },
+    node: { isPrivate: false, isFork: false, object: { history: { nodes: commits, pageInfo: { hasNextPage: true, endCursor: 'benchmark-continuation-cursor' } } } },
     rateLimit: { remaining: 4000, resetAt: '2026-01-01T01:00:00.000Z' },
   } });
   const originalFetch = globalThis.fetch;

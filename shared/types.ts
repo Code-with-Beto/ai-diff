@@ -12,6 +12,7 @@ export interface RepositoryProgress { repository: Repository; status: Repository
 export interface Totals { additions: number; deletions: number; commits: number }
 export interface MonthTotal { month: string; before: number; after: number }
 export interface Coverage { completed: number; unavailable: number; incomplete: number; total: number }
-export interface AnalysisResult { before: Totals; after: Totals; months: MonthTotal[]; firstCommitAt: string | null; cutoff: string; asOf: string; coverage: Coverage; includesPrivate: boolean; ratio: number | null }
-export interface ShareResult { version: 1; login: string; cutoff: string; asOf: string; firstCommitAt: string | null; before: Totals; after: Totals; coverage: Coverage; includesPrivate: boolean; sample: boolean }
+export interface CommitFilterSummary { enabled: boolean; threshold: number; scope: 'both' | 'before'; excludedBefore: Totals; excludedAfter: Totals }
+export interface AnalysisResult { before: Totals; after: Totals; months: MonthTotal[]; firstCommitAt: string | null; cutoff: string; asOf: string; coverage: Coverage; includesPrivate: boolean; ratio: number | null; commitFilter?: CommitFilterSummary; oversizedCommits?: CommitRecord[] }
+export interface ShareResult { version: 1; login: string; cutoff: string; asOf: string; firstCommitAt: string | null; before: Totals; after: Totals; coverage: Coverage; includesPrivate: boolean; sample: boolean; commitFilter?: CommitFilterSummary }
 export interface ApiErrorBody { error: { code: string; message: string; retryAfter?: number } }

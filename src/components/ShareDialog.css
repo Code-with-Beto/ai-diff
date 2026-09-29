@@ -37,8 +37,8 @@
 .sd-dialog .sd-copy-image:hover:not(:disabled) { background: var(--accent); color: var(--accent-contrast); opacity: .9; }
 .sd-copy-image kbd { margin-left: auto; padding-left: .5rem; opacity: .65; font: 400 .75rem/1.4 var(--mono); white-space: nowrap; }
 .sd-secondary-actions { display: flex; gap: .25rem; }
-.sd-dialog .sd-secondary-action { min-width: 3rem; min-height: 2.75rem; padding: .625rem .75rem; border: 1px solid transparent; border-radius: .25rem; background: transparent; color: var(--muted); font-size: .875rem; font-weight: 400; line-height: 1.4; }
-.sd-dialog .sd-secondary-action:hover:not(:disabled) { background: var(--panel-raised); color: var(--text); }
+.sd-dialog .sd-secondary-action { min-width: 3rem; min-height: 2.75rem; padding: .625rem .75rem; border: 1px solid transparent; border-radius: .25rem; background: var(--panel-raised); color: var(--text); font-size: .875rem; font-weight: 400; line-height: 1.4; }
+.sd-dialog .sd-secondary-action:hover:not(:disabled) { background: var(--line); color: var(--text); }
 .sd-dialog button:disabled { cursor: not-allowed; opacity: .45; transform: none; }
 .sd-feedback { display: flex; align-items: flex-start; gap: .5rem; margin: .75rem 0 0; padding: .75rem; background: var(--panel-raised); border-radius: .25rem; color: var(--text); font-size: .875rem; line-height: 1.5; overflow-wrap: anywhere; }
 .sd-feedback svg { margin-top: .125rem; }
@@ -64,3 +64,5 @@
   .sd-dialog .sd-copy-field { font-size: 1rem; }
 }
 @media (prefers-reduced-motion: reduce) { .sd-loading-icon { animation: none; } }
+
+.sd-link-action { min-width: 3rem; padding: .625rem .75rem; min-height: 2.75rem; justify-content: center; }
