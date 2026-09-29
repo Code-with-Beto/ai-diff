@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Check, ChevronDown, CircleHelp, Github, LockKeyhole, LogOut, Plus, Search, SlidersHorizontal, Square, X } from 'lucide-react';
+import { Check, ChevronDown, CircleHelp, Github, ListChecks, ListX, LogOut, Plus, Search, SlidersHorizontal, Square, X } from 'lucide-react';
 import type { AnalysisResult, CommitRecord, InstallationsPage, Repository, RepositoryPage, RepositoryProgress, SessionInfo, ShareResult } from '../shared/types';
 import { ApiError, api } from './api';
 import { analyzeCommits, formatDate, formatNumber } from './lib/analysis';
@@ -18,6 +18,9 @@ import ThemeToggle from './components/ThemeToggle';
 import KeyboardShortcuts from './components/KeyboardShortcuts';
 import ComparisonDateHelp from './components/ComparisonDateHelp';
 import FilterDropdown from './components/FilterDropdown';
+import RepositorySelect from './components/RepositorySelect';
+import Switch from './components/Switch';
+import { HelpTooltip, Tooltip } from './components/Tooltip';
 import { areSingleKeyShortcutsEnabled, isEditingTarget, modifierLabel } from './lib/shortcuts';
 
 const DEFAULT_DATE = '2025-11-24';
@@ -352,12 +355,13 @@ export default function App() {
           ariaLabel={sample ? 'Sample account options' : `GitHub account ${session?.user?.login}`}
           open={openFilter === 'account'} onOpenChange={open => setOpenFilter(open ? 'account' : null)}
         >
-          {sample ? <><p className="small-text">Exploring a fictional account.</p><button className="button secondary account-action" onClick={exitSample}>Exit sample</button></> : <>
-            <p className="account-status"><Check size={14} aria-hidden="true" />Connected to GitHub · read-only</p>
+          {sample ? <><div className="account-status">Sample account<HelpTooltip label="About sample data">Explore fictional commits to try the filters and sharing tools.</HelpTooltip></div><button className="button secondary account-action" onClick={exitSample}>Exit sample</button></> : <>
+            <div className="account-status"><Check size={14} aria-hidden="true" />Connected<HelpTooltip label="About GitHub access">Read-only access. AI Diff reads commit metadata and line counts.</HelpTooltip></div>
             <button className="button secondary account-action" onClick={() => void disconnect()}><LogOut size={15} aria-hidden="true" />Disconnect</button>
           </>}
         </FilterDropdown> : <div className="connection-controls">
           <a href="/api/auth/github/start" className={`button primary ${!session?.configured ? 'disabled' : ''}`} aria-disabled={!session?.configured} onClick={event => { if (!session?.configured) event.preventDefault(); }}><Github size={16} aria-hidden="true" />{connectionExpired ? 'Reconnect GitHub' : 'Connect GitHub'}</a>
+          <HelpTooltip label="About GitHub access">Read-only access. Private repositories are optional.</HelpTooltip>
           <button className="text-button explore-sample" onClick={startSample}>Explore sample</button>
         </div>}
 
@@ -387,36 +391,33 @@ export default function App() {
           open={openFilter === 'repositories'} onOpenChange={open => setOpenFilter(open ? 'repositories' : null)}
           initialFocusRef={repositorySearch}
         >
-          <label className="search-wrap"><Search size={15} aria-hidden="true" /><input ref={repositorySearch} aria-keyshortcuts="/" placeholder="Find a repository…" value={search} onChange={event => setSearch(event.target.value)} aria-label="Filter repositories" disabled={scanning} /><kbd>/</kbd></label>
+          <label className="search-wrap"><Search size={15} aria-hidden="true" /><input ref={repositorySearch} aria-keyshortcuts="/" placeholder="Find a repository…" value={search} onChange={event => setSearch(event.target.value)} onKeyDown={event => {
+            if (event.key === 'ArrowDown') {
+              const option = event.currentTarget.closest('.filter-popover')?.querySelector<HTMLElement>('[role="option"][tabindex="0"]');
+              if (option) { event.preventDefault(); option.focus(); }
+            }
+          }} aria-label="Filter repositories" disabled={scanning} /><kbd>/</kbd></label>
           <div className="repo-controls">
-            <button className="text-button" disabled={scanning || sample || loadingRepos || addingRepo} onClick={() => setSelected(previous => new Set([...previous, ...visibleRepositories.map(repository => repository.id)]))}>{search ? 'Select matching' : 'Select all'}</button>
-            <span className="small-text" role="status">{loadingRepos ? 'Finding repos…' : `${selectedCount} selected`}</span>
-            <button className="text-button" disabled={scanning || sample || loadingRepos || addingRepo} onClick={() => setSelected(new Set())}>Clear</button>
+            <div className="repo-selection-status"><span className="small-text" role="status">{loadingRepos ? 'Finding repos…' : `${selectedCount} selected`}</span><HelpTooltip label="About repository selection">Only your authored commits are counted. Forks are excluded.</HelpTooltip></div>
+            <div className="repo-bulk-actions">
+              <Tooltip label={search ? 'Select matching repositories' : 'Select all repositories'}><button type="button" className="icon-button" aria-label={search ? 'Select matching repositories' : 'Select all repositories'} disabled={scanning || sample || loadingRepos || addingRepo} onClick={() => setSelected(previous => new Set([...previous, ...visibleRepositories.map(repository => repository.id)]))}><ListChecks size={17} aria-hidden="true" /></button></Tooltip>
+              <Tooltip label="Clear selection"><button type="button" className="icon-button" aria-label="Clear selection" disabled={scanning || sample || loadingRepos || addingRepo || !selectedCount} onClick={() => setSelected(new Set())}><ListX size={17} aria-hidden="true" /></button></Tooltip>
+            </div>
           </div>
-          <div className="repository-list" role="group" aria-label="Choose repositories">
-            {visibleRepositories.map(repository => <label key={repository.id} className="repository-option">
-              <input type="checkbox" checked={selected.has(repository.id)} disabled={scanning || sample || loadingRepos || addingRepo} onChange={event => setSelected(previous => {
-                const next = new Set(previous);
-                if (event.target.checked) next.add(repository.id); else next.delete(repository.id);
-                return next;
-              })} />
-              <span title={repository.nameWithOwner}><span className="repo-owner">{repository.nameWithOwner.split('/')[0]}/</span>{repository.nameWithOwner.split('/').slice(1).join('/')}{repository.isArchived && <small>Archived</small>}</span>
-              {repository.isPrivate && <LockKeyhole size={13} aria-label="Private repository" />}
-            </label>)}
-            {!visibleRepositories.length && <p className="small-text repository-empty">{loadingRepos ? 'Looking through your GitHub…' : 'No matching repositories.'}</p>}
-          </div>
-          <p className="repo-scope-note">Only your commits. Forks excluded.</p>
+          <RepositorySelect repositories={visibleRepositories} selected={selected} disabled={scanning || sample || loadingRepos || addingRepo} loading={loadingRepos} onToggle={(id, checked) => setSelected(previous => {
+            const next = new Set(previous);
+            if (checked) next.add(id); else next.delete(id);
+            return next;
+          })} />
           {!sample && <details className="repository-access">
             <summary>Add repositories or private access</summary>
-            <form className="add-repository" onSubmit={event => void addRepository(event)}>
-              <input placeholder="Repository or organization" aria-label="Repository or organization" aria-describedby="repository-source-hint" value={repoUrl} onChange={event => setRepoUrl(event.target.value)} disabled={scanning || loadingRepos || addingRepo} />
-              <button className="icon-button" aria-label={addingRepo ? 'Adding repositories' : 'Add repository or organization'} disabled={!repoUrl.trim() || scanning || loadingRepos || addingRepo}><Plus size={17} aria-hidden="true" /></button>
-            </form>
-            <p className="source-hint" id="repository-source-hint">Paste a GitHub URL or an organization name.</p>
+            <div className="repository-source-row"><form className="add-repository" onSubmit={event => void addRepository(event)}>
+              <input placeholder="Repository or organization" aria-label="Repository or organization" value={repoUrl} onChange={event => setRepoUrl(event.target.value)} disabled={scanning || loadingRepos || addingRepo} />
+              <Tooltip label="Add repository or organization"><button className="icon-button" aria-label={addingRepo ? 'Adding repositories' : 'Add repository or organization'} disabled={!repoUrl.trim() || scanning || loadingRepos || addingRepo}><Plus size={17} aria-hidden="true" /></button></Tooltip>
+            </form><HelpTooltip label="How to add repositories">Paste a public GitHub repository URL or an organization name to find more repositories.</HelpTooltip></div>
             {sourceNotice && <p className="source-notice" role="status">{sourceNotice}</p>}
-            <label className="private-toggle"><input type="checkbox" checked={includePrivate} disabled={scanning || loadingRepos || addingRepo || installing} onChange={event => { setIncludePrivate(event.target.checked); if (event.target.checked) void loadRepositories(true); }} /><span>Include private repositories</span><LockKeyhole size={13} aria-hidden="true" /></label>
+            <div className="setting-toggle private-toggle"><span>Private repositories</span><HelpTooltip label="About private repositories">Choose personal or organization repositories on GitHub. Access is read-only, and your organization may need to approve it.</HelpTooltip><Switch label="Include private repositories" checked={includePrivate} disabled={scanning || loadingRepos || addingRepo || installing} onCheckedChange={checked => { setIncludePrivate(checked); if (checked) void loadRepositories(true); }} /></div>
             {includePrivate && <div className="private-info">
-              <p>Choose personal or organization repositories on GitHub. Your organization may need to approve access.</p>
               <button className="text-button" disabled={scanning || installing || loadingRepos || addingRepo} onClick={() => void installPrivate()}>{installing ? 'Opening GitHub…' : 'Choose repositories on GitHub'}</button>
               <button className="text-button" disabled={loadingRepos || scanning || addingRepo || installing} onClick={() => void loadRepositories(true)}>Refresh access</button>
             </div>}
@@ -429,7 +430,7 @@ export default function App() {
           ariaLabel="Line-count filters"
           open={openFilter === 'filters'} onOpenChange={open => setOpenFilter(open ? 'filters' : null)}
         >
-          <section className="commit-filter-control" aria-label="File filter"><label className="commit-filter-toggle"><input type="checkbox" checked={excludeLockfiles} onChange={event => setExcludeLockfiles(event.target.checked)} /><span>Exclude lockfiles</span></label><p className="commit-filter-threshold">Both periods. Verified file counts.</p></section>
+          <section className="commit-filter-control" aria-label="File filter"><div className="setting-toggle"><span>Exclude lockfiles</span><HelpTooltip label="About the lockfile filter">Removes verified lockfile changes from both periods.</HelpTooltip><Switch label="Exclude lockfiles" checked={excludeLockfiles} onCheckedChange={setExcludeLockfiles} /></div></section>
           <CommitFilterControl enabled={skipOversized} onEnabledChange={setSkipOversized} />
         </FilterDropdown>
 
@@ -437,8 +438,8 @@ export default function App() {
           {scanning ? <><Square size={14} aria-hidden="true" />Cancel scan</> : <>Analyze<kbd>{modifierLabel} ↵</kbd></>}
         </button>
       </section>
-      {!authenticated && !sample && <div className="connection-note">
-        {sessionFailed ? <span>Connection unavailable. <button className="link-button" onClick={() => window.location.reload()}>Retry</button></span> : session && !session.configured ? 'GitHub isn’t configured locally. Explore the sample.' : 'Read-only access. Private repositories are optional.'}
+      {!authenticated && !sample && (sessionFailed || (session && !session.configured)) && <div className="connection-note">
+        {sessionFailed ? <span>Connection unavailable. <button className="link-button" onClick={() => window.location.reload()}>Retry</button></span> : 'GitHub isn’t configured locally. Explore the sample.'}
       </div>}
       <div className="result-area">
 {(error || callbackError) && <div className="error-banner" role="alert"><span>{error || callbackError}{connectionExpired && <> <a href="/api/auth/github/start" className="reconnect-link">Reconnect GitHub</a></>}</span><button className="icon-button" aria-label="Dismiss error" onClick={() => { setError(''); setCallbackError(''); window.history.replaceState({}, '', '/'); }}><X size={16} /></button></div>}{selectionChanged && <p className="selection-notice" role="status">Repository selection changed. Analyze again to update these results.</p>}{scanning && <div className="scan-progress" role="status" aria-live="polite"><span className="spinner" /><div><strong>{scanMessage}</strong><span>{progress.filter(r => r.status === 'complete').length} of {progress.length} repositories complete</span></div></div>}{preview || sample || progress.length > 0 ? <Result result={result} login={user?.login ?? ''} sample={sample || preview} share={shareResult} /> : <div className="empty-result"><h2>Select repositories to begin.</h2><p>Your code stays on GitHub.</p><kbd>{modifierLabel} ↵ to analyze</kbd></div>}{!scanning && scanMessage && <p className="scan-completion" role="status">{scanMessage}</p>}{progress.some(p => p.message) && <details className="coverage-details"><summary>Repository coverage details</summary>{progress.filter(p => p.message).map(p => <p key={p.repository.id}><strong>{p.repository.nameWithOwner}</strong>: {p.message}</p>)}</details>}<p className="result-disclaimer">Unequal time spans. Activity, not AI authorship or productivity. <a href="/about">Methodology</a></p></div></div>

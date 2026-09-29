@@ -1,6 +1,8 @@
 import type { AnalysisResult } from '../../shared/types';
 import { formatDate, formatNumber, OVERSIZED_COMMIT_THRESHOLD } from '../lib/analysis';
 import { describeCommitFilter } from '../lib/share';
+import Switch from './Switch';
+import { HelpTooltip } from './Tooltip';
 import './CommitFilter.css';
 
 const compactThreshold = (threshold: number) => new Intl.NumberFormat('en-US', { notation: 'compact' }).format(threshold).toLowerCase();
@@ -10,8 +12,7 @@ export function CommitFilterControl({ enabled, onEnabledChange }: {
   onEnabledChange: (enabled: boolean) => void;
 }) {
   return <section className="commit-filter-control" aria-label="Commit size filter">
-    <label className="commit-filter-toggle"><input type="checkbox" checked={enabled} onChange={event => onEnabledChange(event.target.checked)} /><span>Skip oversized commits</span></label>
-    <p className="commit-filter-threshold">Over {compactThreshold(OVERSIZED_COMMIT_THRESHOLD)} added + deleted lines after file filtering. Both periods.</p>
+    <div className="setting-toggle"><span>Skip oversized commits</span><HelpTooltip label="About the commit size filter">Skips commits with over {compactThreshold(OVERSIZED_COMMIT_THRESHOLD)} added + deleted lines after file filtering. Applies to both periods.</HelpTooltip><Switch label="Skip oversized commits" checked={enabled} onCheckedChange={onEnabledChange} /></div>
   </section>;
 }
 

@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Keyboard, X } from 'lucide-react';
+import Switch from './Switch';
+import { HelpTooltip } from './Tooltip';
 import { areSingleKeyShortcutsEnabled, isEditingTarget, modifierLabel, setSingleKeyShortcutsEnabled, subscribeToSingleKeyShortcuts } from '../lib/shortcuts';
 
 export default function KeyboardShortcuts() {
@@ -28,7 +30,7 @@ export default function KeyboardShortcuts() {
     <button className="icon-button" onClick={() => setOpen(true)} aria-label="Keyboard shortcuts" aria-haspopup="dialog" aria-keyshortcuts={singleKeyEnabled ? 'Shift+/' : undefined} title={singleKeyEnabled ? 'Keyboard shortcuts (?)' : 'Keyboard shortcuts'}><Keyboard size={18} aria-hidden="true" /></button>
     {open && <dialog ref={dialog} className="shortcuts-dialog" aria-labelledby="shortcuts-title" onCancel={event => { event.preventDefault(); setOpen(false); }} onClick={event => { if (event.target === event.currentTarget) setOpen(false); }}>
       <div className="shortcuts-heading"><h2 id="shortcuts-title">Keyboard shortcuts</h2><button className="icon-button" aria-label="Close shortcuts" onClick={() => setOpen(false)}><X size={18} aria-hidden="true" /></button></div>
-      <label className="shortcuts-preference"><input type="checkbox" checked={singleKeyEnabled} onChange={event => setSingleKeyShortcutsEnabled(event.target.checked)} /><span>Enable single-key shortcuts<small>T, /, and ? · this page only</small></span></label>
+      <div className="shortcuts-preference setting-toggle"><span>Single-key shortcuts</span><HelpTooltip label="About single-key shortcuts">Enable T, /, and ? for this page. Shortcuts with modifier keys stay available.</HelpTooltip><Switch label="Enable single-key shortcuts" checked={singleKeyEnabled} onCheckedChange={setSingleKeyShortcutsEnabled} /></div>
       <dl>
         <div><dt>Toggle theme</dt><dd><kbd>T</kbd></dd></div>
         <div><dt>Find a repository</dt><dd><kbd>/</kbd></dd></div>

@@ -1,0 +1,7 @@
+.switch-control { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 44px; width: 44px; min-height: 44px; padding: 4px; border: 0; border-radius: 6px; background: transparent; }
+.switch-track { display: block; width: 36px; height: 21px; padding: 3px; border-radius: 999px; background: var(--line); transition: background .15s; }
+.switch-thumb { display: block; width: 15px; height: 15px; border-radius: 50%; background: var(--muted); transition: transform .15s, background .15s; }
+.switch-control[aria-checked='true'] .switch-track { background: var(--accent); }
+.switch-control[aria-checked='true'] .switch-thumb { transform: translateX(15px); background: #fff; }
+.switch-control:hover:not(:disabled) .switch-track { filter: brightness(1.1); }
+@media (prefers-reduced-motion: reduce) { .switch-track, .switch-thumb { transition: none; } }
