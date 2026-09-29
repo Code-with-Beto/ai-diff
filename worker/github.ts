@@ -34,7 +34,34 @@ export async function externalFetch(url: string, init: RequestInit): Promise<Res
   }
 }
 
-export async function github<T>(token: string, path: string, options: { query?: string; variables?: Record<string, unknown> } = {}): Promise<{ data: T; response: Response }> {
+async function readJson(response: Response, maximum?: number): Promise<unknown> {
+  if (maximum === undefined) return response.json();
+  const declared = Number(response.headers.get('content-length'));
+  if (Number.isFinite(declared) && declared > maximum) {
+    await response.body?.cancel();
+    throw new ApiError(502, 'github_response_too_large', 'GitHub returned more detail than this scan can safely inspect.');
+  }
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error('Empty response');
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > maximum) {
+      await reader.cancel();
+      throw new ApiError(502, 'github_response_too_large', 'GitHub returned more detail than this scan can safely inspect.');
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+  return JSON.parse(new TextDecoder().decode(bytes)) as unknown;
+}
+
+export async function github<T>(token: string, path: string, options: { query?: string; variables?: Record<string, unknown>; maxResponseBytes?: number } = {}): Promise<{ data: T; response: Response }> {
   const response = await externalFetch(`https://api.github.com${path}`, {
     method: options.query ? 'POST' : 'GET',
     headers: { Accept: 'application/vnd.github+json', Authorization: `Bearer ${token}`, 'X-GitHub-Api-Version': GITHUB_API_VERSION, 'User-Agent': 'Code-with-Beto-AI-Diff', ...(options.query ? { 'Content-Type': 'application/json' } : {}) },
@@ -46,13 +73,16 @@ export async function github<T>(token: string, path: string, options: { query?: 
     throw new ApiError(429, 'rate_limited', 'GitHub has paused this scan. Please wait before retrying.', retryAfter ?? 60);
   }
   if (response.status === 403) {
-    const failure = await response.clone().json().catch(() => null) as { message?: string } | null;
+    const failure = await readJson(response, options.maxResponseBytes).catch(() => null) as { message?: string } | null;
     if (/rate limit|abuse detection/i.test(failure?.message ?? '')) throw new ApiError(429, 'rate_limited', 'GitHub has paused this scan. Please wait before retrying.', retryAfter ?? 60);
   }
   if (response.status === 403 || response.status === 404) throw new ApiError(403, 'repository_unavailable', 'This repository is unavailable to your GitHub connection. Check the app permissions or organization approval.');
   if (!response.ok) throw new ApiError(502, 'github_unavailable', 'GitHub could not complete this request. Please retry.');
   let body: unknown;
-  try { body = await response.json(); } catch { throw new ApiError(502, 'github_unavailable', 'GitHub returned an unreadable response. Please retry.'); }
+  try { body = await readJson(response, options.maxResponseBytes); } catch (error) {
+    if (error instanceof ApiError) throw error;
+    throw new ApiError(502, 'github_unavailable', 'GitHub returned an unreadable response. Please retry.');
+  }
   if (options.query) {
     const result = body as { data?: T; errors?: { type?: string; message?: string }[] };
     // Partial GraphQL responses must never become apparently complete results.
@@ -78,10 +108,11 @@ export const CONTRIBUTED_QUERY = `query Contributed($after: String) { viewer { r
 export const ORGANIZATION_QUERY = `query OrganizationRepositories($login: String!, $after: String) { organization(login: $login) { repositories(first: 100, after: $after, ownerAffiliations: [OWNER], privacy: PUBLIC, isFork: false, orderBy: {field: NAME, direction: ASC}) { nodes { ${REPOSITORY_FIELDS} } pageInfo { hasNextPage endCursor } } } }`;
 export const PUBLIC_REPOSITORY_QUERY = `query PublicRepository($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { ${REPOSITORY_FIELDS} } }`;
 export const SNAPSHOT_QUERY = `query Snapshot($id: ID!) { node(id: $id) { ... on Repository { ${REPOSITORY_FIELDS} defaultBranchRef { target { ... on Commit { oid } } } } } }`;
+export const FILE_REPOSITORY_QUERY = `query FileRepository($id: ID!) { node(id: $id) { ... on Repository { id databaseId nameWithOwner isPrivate isFork } } }`;
 export const SCAN_QUERY = `query ScanPage($id: ID!, $head: GitObjectID!, $author: ID!, $after: String, $until: GitTimestamp!) {
   node(id: $id) { ... on Repository { isPrivate isFork object(oid: $head) { ... on Commit {
     history(first: 100, after: $after, author: {id: $author}, until: $until) {
-      nodes { oid additions deletions committedDate author { user { id } } parents(first: 1) { totalCount } }
+      nodes { oid additions deletions committedDate messageHeadline changedFilesIfAvailable author { user { id } } parents(first: 1) { totalCount } }
       pageInfo { hasNextPage endCursor }
     }
   } } } }

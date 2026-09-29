@@ -24,9 +24,11 @@ try {
   git(['config', 'user.name', 'Fixture Builder']);
   git(['config', 'user.email', 'fixture@example.test']);
   record('main.txt', 'one\ntwo\n', '2019-01-01T12:00:00Z');
+  record('package-lock.json', 'dependency\n'.repeat(20), '2025-09-27T12:00:00Z');
   record('main.txt', 'one\ntwo\nthree\nfour\nfive\n', '2025-09-28T23:59:59Z');
   record('other.txt', 'not mine\n', '2025-09-28T23:59:59Z', 'other@example.test');
   record('generated.txt', 'a\nb\nc\nd\n', '2025-09-29T00:00:00Z');
+  record('package-lock.json', 'new dependency\n'.repeat(5), '2025-09-29T12:00:00Z');
   git(['checkout', '-b', 'feature']);
   record('feature.txt', 'feature one\nfeature two\n', '2025-09-30T12:00:00Z');
   git(['checkout', 'main']);
@@ -41,11 +43,12 @@ try {
     const stats = git(['show', '--format=', '--numstat', '--first-parent', oid]);
     let additions = 0;
     let deletions = 0;
+    const files = [];
     for (const row of stats.split('\n').filter(Boolean)) {
-      const [added, deleted] = row.split('\t');
-      if (added !== '-' && deleted !== '-') { additions += Number(added); deletions += Number(deleted); }
+      const [added, deleted, filename] = row.split('\t');
+      if (added !== '-' && deleted !== '-') { additions += Number(added); deletions += Number(deleted); files.push({filename, status:'modified', additions:Number(added), deletions:Number(deleted)}); }
     }
-    return { oid, committedDate, additions, deletions, authorId: email === 'fixture@example.test' ? 'fixture' : 'other', parentCount: parents ? parents.split(' ').length : 0 };
+    return { files, filesComplete: true, changedFiles: files.length, oid, committedDate, additions, deletions, authorId: email === 'fixture@example.test' ? 'fixture' : 'other', parentCount: parents ? parents.split(' ').length : 0 };
   });
   const cutoff = '2025-09-29';
   const asOf = '2025-10-01T12:00:00.000Z';
@@ -69,10 +72,19 @@ try {
   const after = totalFromGit(['--since=2025-09-29T00:00:00Z', `--until=${asOf}`]);
   assert.deepEqual(result.before, before);
   assert.deepEqual(result.after, after);
-  assert.equal(result.before.additions, 5);
-  assert.equal(result.after.additions, 7);
-  assert.equal(result.before.commits + result.after.commits, 5);
-  console.log(`Git fixture verified: ${before.additions} additions before; ${after.additions} after. Root, merge exclusion, primary author, UTC cutoff, pagination duplicates and snapshot end match local Git.`);
+  assert.equal(result.before.additions, 25);
+  assert.equal(result.after.additions, 12);
+  assert.equal(result.before.commits + result.after.commits, 7);
+  const filtered = analyzeCommits([...commits, ...commits], 'fixture', cutoff, asOf, [{repository: { id:'fixture', nameWithOwner:'fixture/test', isPrivate:false, isFork:false, isArchived:false, description:null }, status:'complete', commits:commits.length}], {excludeLockfiles:true});
+  for (const [period,bounds] of [['before',['--until=2025-09-28T23:59:59Z']],['after',['--since=2025-09-29T00:00:00Z',`--until=${asOf}`]]]) {
+    const rows=git(['log','--no-merges','--author=fixture@example.test','--format=','--numstat',...bounds,'--','.',':(exclude)package-lock.json']);
+    let additions=0,deletions=0;
+    for(const row of rows.split('\n').filter(Boolean)){const [added,deleted]=row.split('\t');if(added!=='-'&&deleted!=='-'){additions+=Number(added);deletions+=Number(deleted);}}
+    assert.equal(filtered[period].additions, additions);assert.equal(filtered[period].deletions,deletions);
+  }
+  assert.equal(filtered.before.additions,5);assert.equal(filtered.after.additions,7);
+  assert.equal(filtered.fileFilter.excludedBefore.additions,20);assert.equal(filtered.fileFilter.excludedAfter.deletions,20);
+  console.log(`Git fixture verified: ${before.additions} additions before; ${after.additions} after. Root, merge exclusion, primary author, UTC cutoff, pagination duplicates and snapshot end match local Git. Lockfile-filtered additions also match Git path exclusions (5 before; 7 after).`);
 } finally {
   rmSync(directory, { recursive: true, force: true });
 }

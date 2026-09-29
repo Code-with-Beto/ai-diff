@@ -3,6 +3,7 @@ import { isNonForkRepository } from '../shared/repository-policy';
 import { ApiError, CONTRIBUTED_QUERY, externalFetch, github, ORGANIZATION_QUERY, OWNED_QUERY, PUBLIC_REPOSITORY_QUERY, SCAN_QUERY, SNAPSHOT_QUERY, VIEWER_QUERY } from './github';
 import { challenge, cookie, decode, origin, randomString, readCookie, seal, sign, unseal, verify } from './security';
 import { publicShare, publicShareError, publishShare, SHARE_BODY_LIMIT, type ShareStore } from './sharing';
+import { addFileHandles, scanCommitFiles } from './commit-files';
 
 export interface Env {
   SESSION_SECRET: string;
@@ -13,6 +14,7 @@ export interface Env {
   ASSETS: { fetch(request: Request): Promise<Response> };
   AUTH_LIMITER?: { limit(options: { key: string }): Promise<{ success: boolean }> };
   API_LIMITER?: { limit(options: { key: string }): Promise<{ success: boolean }> };
+  FILE_LIMITER?: { limit(options: { key: string }): Promise<{ success: boolean }> };
   SHARE_LIMITER?: { limit(options: { key: string }): Promise<{ success: boolean }> };
   SHARE_RESULTS?: ShareStore;
 }
@@ -24,7 +26,7 @@ interface ScanHandle { version: 1; purpose: 'scan-page'; sessionId: string; gith
 interface PageInfo { hasNextPage: boolean; endCursor: string | null }
 interface RepoConnection { nodes: Repository[]; pageInfo: PageInfo }
 interface RestRepository { node_id: string; full_name: string; private: boolean; fork: boolean; archived: boolean; description: string | null }
-interface GithubCommit { oid: string; additions: number; deletions: number; committedDate: string; author: { user: { id: string } | null } | null; parents: { totalCount: number } }
+interface GithubCommit { oid: string; additions: number; deletions: number; committedDate: string; messageHeadline: string; changedFilesIfAvailable: number | null; author: { user: { id: string } | null } | null; parents: { totalCount: number } }
 interface ScanData { node: { isPrivate: boolean; isFork: boolean; object: { history: { nodes: GithubCommit[]; pageInfo: PageInfo } } | null } | null; rateLimit: { remaining: number; resetAt: string } }
 
 const now = () => Math.floor(Date.now() / 1000);
@@ -36,7 +38,7 @@ function configured(env: Env): boolean {
 }
 
 async function enforceLimit(limiter: Env['API_LIMITER'], key: string): Promise<void> {
-  // Bindings are optional for local development and unit tests. Production binds both.
+  // Bindings are optional for local development and unit tests. Production binds each limiter.
   if (limiter && !(await limiter.limit({ key })).success) {
     throw new ApiError(429, 'rate_limited', 'Too many requests. Please wait one minute and try again.', 60);
   }
@@ -259,20 +261,22 @@ async function scanPage(env: Env, session: Session, input: Record<string, unknow
     handle = await verify<ScanHandle>(env, 'scan-page', string(input.handle, 6000));
     if (handle.version !== 1 || handle.purpose !== 'scan-page' || handle.sessionId !== session.sessionId || handle.githubUserId !== session.user.id || handle.expiresAt <= now() || !handle.repositoryNodeId || !handle.headOid || !handle.asOf) throw new Error();
   } catch { throw new ApiError(400, 'invalid_scan', 'This scan is expired or invalid. Start a new scan.'); }
-  const { data } = await github<ScanData>(session.token, '/graphql', { query: SCAN_QUERY, variables: { id: handle.repositoryNodeId, head: handle.headOid, author: session.user.id, after: handle.after, until: handle.asOf } });
+  const { data } = await github<ScanData>(session.token, '/graphql', { query: SCAN_QUERY, variables: { id: handle.repositoryNodeId, head: handle.headOid, author: session.user.id, after: handle.after, until: handle.asOf }, maxResponseBytes: 256 * 1024 });
   // Recheck live metadata, including handles issued before fork exclusion existed.
   if (data.node) requireNonForkRepository(data.node);
   if (data.node?.isPrivate && !handle.isPrivate) throw new ApiError(403, 'repository_visibility_changed', 'This repository became private during the scan. Select it from your private repositories and start a new scan.');
   if (data.node && typeof data.node.isPrivate !== 'boolean') throw new ApiError(502, 'github_incomplete', 'GitHub could not confirm the repository visibility. Please retry this page.');
   const history = data.node?.object?.history;
   if (!history || !Array.isArray(history.nodes) || !history.pageInfo || (history.pageInfo.hasNextPage && (!history.pageInfo.endCursor || history.pageInfo.endCursor === handle.after))) throw new ApiError(502, 'github_incomplete', 'GitHub could not read this snapshot. Retry, or start a new scan.');
-  const commits: CommitRecord[] = history.nodes.map((commit) => {
-    if (!commit?.oid || !Number.isSafeInteger(commit.additions) || commit.additions < 0 || !Number.isSafeInteger(commit.deletions) || commit.deletions < 0 || !Number.isSafeInteger(commit.parents?.totalCount) || commit.parents.totalCount < 0 || !Number.isFinite(Date.parse(commit.committedDate))) throw new ApiError(502, 'github_incomplete', 'GitHub returned incomplete commit statistics. Please retry this page.');
-    return { oid: commit.oid, additions: commit.additions, deletions: commit.deletions, committedDate: commit.committedDate, authorId: commit.author?.user?.id ?? null, parentCount: commit.parents.totalCount };
+  if (history.nodes.length > 100) throw new ApiError(502, 'github_incomplete', 'GitHub returned too many commits in this page. Please retry.');
+  const records: CommitRecord[] = history.nodes.map((commit) => {
+    if (!/^[a-f0-9]{40,64}$/.test(commit?.oid ?? '') || !Number.isSafeInteger(commit.additions) || commit.additions < 0 || !Number.isSafeInteger(commit.deletions) || commit.deletions < 0 || !Number.isSafeInteger(commit.parents?.totalCount) || commit.parents.totalCount < 0 || !Number.isFinite(Date.parse(commit.committedDate)) || (commit.changedFilesIfAvailable != null && (!Number.isSafeInteger(commit.changedFilesIfAvailable) || commit.changedFilesIfAvailable < 0))) throw new ApiError(502, 'github_incomplete', 'GitHub returned incomplete commit statistics. Please retry this page.');
+    return { oid: commit.oid, additions: commit.additions, deletions: commit.deletions, committedDate: commit.committedDate, authorId: commit.author?.user?.id ?? null, parentCount: commit.parents.totalCount, headline: typeof commit.messageHeadline === 'string' ? commit.messageHeadline.slice(0, 240) : '', changedFiles: commit.changedFilesIfAvailable ?? null };
   // Commit.author is the primary Git author. Commit.authors can also contain
   // Co-authored-by trailers; being a coauthor or committer does not qualify.
   }).filter(commit => commit.authorId === session.user.id);
   if (!data.rateLimit || !Number.isFinite(data.rateLimit.remaining) || !Number.isFinite(Date.parse(data.rateLimit.resetAt))) throw new ApiError(502, 'github_incomplete', 'GitHub returned incomplete rate-limit information. Please retry this page.');
+  const commits = await addFileHandles(env, session, handle, records);
   const nextHandle = history.pageInfo.hasNextPage ? await sign(env, 'scan-page', { ...handle, after: history.pageInfo.endCursor }) : null;
   return json({ commits, nextHandle, remaining: data.rateLimit.remaining, resetAt: data.rateLimit.resetAt });
 }
@@ -294,6 +298,13 @@ async function route(request: Request, env: Env, url: URL): Promise<Response> {
   if (request.method === 'POST') checkCsrf(request, env, session);
   // Always let an authenticated user revoke and clear a session, even after a scan hits the limit.
   if (path === '/api/auth/logout' && request.method === 'POST') return logout(env, session);
+  // File reads are separately bounded because a full audit may inspect thousands
+  // of commits. They retain session + CSRF checks and never bypass GitHub limits.
+  if (path === '/api/scan/files' && request.method === 'POST') {
+    await enforceLimit(env.FILE_LIMITER, `files:user:${session.user.id}`);
+    await enforceLimit(env.FILE_LIMITER, `files:ip:${request.headers.get('CF-Connecting-IP') ?? 'unknown'}`);
+    return json(await scanCommitFiles(env, session, await body(request)));
+  }
   await enforceLimit(env.API_LIMITER, `user:${session.user.id}`);
   if (path === '/api/share' && request.method === 'POST') {
     await enforceLimit(env.SHARE_LIMITER, `share:user:${session.user.id}`);

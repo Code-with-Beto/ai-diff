@@ -13,11 +13,11 @@ Compare your GitHub activity before and after you started using AI. Connect GitH
 - Discover public repositories you own or recently contributed to. Add a public organization to load its repositories, or add a repository by URL.
 - Include private repositories through selected GitHub App installations. Private organization access may require an owner’s approval.
 - Choose an AI release date or your own cutoff. Change the date and filters after scanning without fetching the history again.
-- Explore additions, deletions, monthly activity, and repository coverage. Copy or download a result image, or create a short public link with that image as its social preview.
+- Explore additions, deletions, monthly activity, and individual commits and files. Copy or download a result image, or create a short public link with that image as its social preview.
 
 AI Diff counts **lines added in default-branch commits whose primary author matches your GitHub account**. It excludes forks and merge commits, deduplicates commit SHAs, and splits the periods at midnight UTC.
 
-Additions include documentation, lockfiles, generated text, imports, and repeated edits. Commits changing more than 100,000 lines are skipped by default; you can inspect or disable that filter. It is a whole-commit size heuristic, not file-level detection.
+By default, dependency lockfiles and checksums are removed first, then commits changing more than 100,000 remaining lines are skipped. The same filters apply to both periods and can be disabled. Documentation, other generated text, imports, and repeated edits still count. Commits whose files could not be fully inspected are omitted from filtered totals and marked incomplete; raw mode retains their known aggregate counts.
 
 Results cover selected, accessible history. Automatic discovery does not include every organization you have worked in. These numbers measure commit activity, not AI authorship or productivity. [Read the methodology](https://aidiff.cwb.sh/about).
 
@@ -49,7 +49,7 @@ Run `npm run test:git` when changing counting logic. It checks the calculation a
 
 See the [backend guide](README-backend.md) for configuration, API contracts, [deployment](README-backend.md#deploying-your-own-instance), and [privacy details](README-backend.md#privacy-and-sharing).
 
-GitHub access is read-only. Analysis stays in browser memory, and images are generated locally. **Create public link** stores only the aggregate summary and the exact preview PNG. Anyone with the link can see them; sharing private totals requires explicit consent. Repository names and raw commits are left out. Downloads and long result links remain available if publishing reaches the free limits.
+GitHub access is read-only. File inspection receives GitHub responses that may contain diff context; the Worker discards patches and returns only file metadata and line counts. Analysis stays in browser memory, and images are generated locally. **Create public link** stores only the aggregate summary and exact preview PNG. Anyone with the link can see them; sharing private totals requires explicit consent. File paths, repository names, and raw commits are left out. Downloads and long result links remain available if publishing reaches the free limits.
 
 ## Contributing
 

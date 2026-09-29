@@ -1,0 +1,76 @@
+.mb-dialog {
+  width: min(820px, calc(100% - 32px));
+  max-height: calc(100dvh - 48px);
+  margin: auto;
+  padding: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  text-align: left;
+}
+.mb-dialog::backdrop { background: #0008; }
+.mb-dialog *, .mb-dialog *::before, .mb-dialog *::after { box-sizing: border-box; }
+.mb-header { position: sticky; top: 0; z-index: 2; display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; padding: 24px 28px 20px; background: var(--panel); }
+.mb-header h2 { margin: 0; color: var(--text); font-size: 20px; font-weight: 600; line-height: 1.4; }
+.mb-header h2:focus { outline: none; }
+.mb-header p { margin: 6px 0 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
+.mb-close { display: grid; place-items: center; flex-shrink: 0; width: 36px; height: 36px; margin: -6px -8px 0 0; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--muted); cursor: pointer; }
+.mb-close:hover { color: var(--text); background: var(--panel-raised); }
+.mb-body { padding: 4px 28px 28px; }
+.mb-overview { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; margin: 0 0 28px; }
+.mb-overview dt { margin-bottom: 8px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.mb-overview dd { margin: 0; color: var(--text); font-family: var(--mono); font-size: 23px; font-weight: 600; line-height: 1.4; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.mb-partial { display: block; color: var(--muted); font-family: inherit; font-size: 11px; font-weight: 400; }
+.mb-note { margin: 12px 0; color: var(--muted); font-size: 12px; line-height: 1.7; }
+.mb-empty { padding: 24px 0; color: var(--muted); font-size: 14px; }
+.mb-repository { margin-top: 28px; }
+.mb-repository-header { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; padding: 0 0 12px; border-bottom: 1px solid var(--line); }
+.mb-repository-header h3 { margin: 0; color: var(--text); font-size: 14px; font-weight: 550; line-height: 1.5; overflow-wrap: anywhere; }
+.mb-private { display: inline-block; margin-left: 8px; color: var(--muted); font-size: 11px; font-weight: 400; }
+.mb-repository-count { color: var(--text); font-family: var(--mono); font-size: 13px; white-space: nowrap; }
+.mb-commit { border-bottom: 1px solid var(--line); }
+.mb-commit > summary { display: flex; align-items: flex-start; gap: 12px; padding: 16px 0; color: var(--text); list-style: none; cursor: pointer; }
+.mb-commit > summary::-webkit-details-marker { display: none; }
+.mb-commit > summary::before { content: ''; width: 5px; height: 5px; margin: 7px 4px 0 1px; flex: 0 0 5px; border-right: 1px solid currentColor; border-bottom: 1px solid currentColor; transform: rotate(-45deg); color: var(--muted); }
+.mb-commit[open] > summary::before { transform: rotate(45deg); }
+.mb-commit > summary:hover .mb-commit-title { text-decoration: underline; text-decoration-color: var(--muted); text-underline-offset: 3px; }
+.mb-commit-label { flex: 1; min-width: 0; }
+.mb-commit-title { display: block; color: var(--text); font-size: 14px; font-weight: 400; line-height: 1.5; overflow-wrap: anywhere; }
+.mb-commit-meta { display: block; margin-top: 5px; color: var(--muted); font-size: 11px; line-height: 1.6; }
+.mb-commit-meta code { font-family: var(--mono); font-size: inherit; }
+.mb-commit-counts { display: grid; gap: 3px; padding-top: 1px; color: var(--text); text-align: right; font: 12px/1.5 var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.mb-commit-counts > span:last-child { color: var(--muted); }
+.mb-commit-body { padding: 0 0 20px 22px; }
+.mb-commit-totals { display: flex; flex-wrap: wrap; gap: 12px 32px; margin: 0 0 16px; }
+.mb-commit-totals dt { color: var(--muted); font-size: 11px; line-height: 1.5; }
+.mb-commit-totals dd { margin: 4px 0 0; color: var(--text); font: 12px/1.5 var(--mono); }
+.mb-files-scroll { max-height: 340px; margin-top: 16px; overflow: auto; overscroll-behavior: contain; }
+.mb-files { width: 100%; border-collapse: collapse; font-size: 12px; }
+.mb-files caption { padding: 0 0 12px; color: var(--muted); text-align: left; font-size: 11px; line-height: 1.5; }
+.mb-files th, .mb-files td { padding: 10px 8px; border-bottom: 1px solid var(--line); text-align: right; vertical-align: top; }
+.mb-files thead th { position: sticky; top: 0; z-index: 1; background: var(--panel); color: var(--muted); font-size: 11px; font-weight: 400; }
+.mb-files th:first-child { padding-left: 0; text-align: left; }
+.mb-files tr > :last-child { padding-right: 0; }
+.mb-files tbody th { width: 100%; min-width: 140px; font-weight: 400; line-height: 1.6; }
+.mb-files code { color: var(--text); font-family: var(--mono); font-size: 11px; overflow-wrap: anywhere; }
+.mb-files td { color: var(--text); font-family: var(--mono); font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.mb-files .mb-file-excluded code, .mb-files td.mb-file-count-excluded { color: var(--muted); }
+.mb-previous-file, .mb-file-status { display: block; margin-top: 3px; color: var(--muted); font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; }
+.mb-commit-link { display: inline-block; margin-top: 12px; color: var(--muted); font-size: 12px; text-decoration: underline; text-underline-offset: 3px; }
+.mb-commit-link:hover { color: var(--text); }
+.mb-footnote { margin: 28px 0 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.mb-dialog :is(button, summary, a, [tabindex='0']):focus-visible { outline: 2px solid var(--text); outline-offset: 3px; }
+@media (max-width: 600px) {
+  .mb-dialog { width: calc(100% - 16px); max-height: calc(100dvh - 16px); }
+  .mb-header { padding: 20px 16px 16px; }
+  .mb-body { padding: 4px 16px 24px; }
+  .mb-overview { gap: 16px; }
+  .mb-overview dd { font-size: 18px; }
+  .mb-overview dt { font-size: 11px; }
+  .mb-commit-body { padding-left: 0; }
+  .mb-repository-header { gap: 8px; }
+  .mb-commit > summary { gap: 8px; }
+}

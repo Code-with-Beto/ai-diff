@@ -22,7 +22,7 @@ const apiResponse = (body: unknown, status = 200, headers: Record<string, string
 const request = (path: string, options: RequestInit = {}) => new Request(`${env.APP_ORIGIN}${path}`, options);
 const authenticated = (path: string, options: RequestInit = {}) => request(path, { ...options, headers: { Cookie: sessionCookie, ...options.headers } });
 const post = (path: string, input: unknown, headers: Record<string, string> = {}) => authenticated(path, { method: 'POST', headers: { Origin: env.APP_ORIGIN, 'x-csrf-token': csrf, 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(input) });
-const historyCommit = (oid: string, authorId: string | null = viewer.id) => ({ oid, additions: 20, deletions: 3, committedDate: '2025-12-01T00:00:00Z', author: { user: authorId === null ? null : { id: authorId } }, parents: { totalCount: 1 } });
+const historyCommit = (oid: string, authorId: string | null = viewer.id) => ({ oid: Buffer.from(oid).toString('hex').padEnd(40, '0'), additions: 20, deletions: 3, committedDate: '2025-12-01T00:00:00Z', messageHeadline: 'Update project', changedFilesIfAvailable: 2, author: { user: authorId === null ? null : { id: authorId } }, parents: { totalCount: 1 } });
 const historyResponse = (nodes: unknown[], endCursor: string | null = null, overrides = {}) => apiResponse({ data: {
   node: { isPrivate: false, isFork: false, object: { history: { nodes, pageInfo: { hasNextPage: endCursor !== null, endCursor } } }, ...overrides },
   rateLimit: { remaining: 4500, resetAt: '2026-01-01T01:00:00Z' },
@@ -388,7 +388,7 @@ describe('signed scan pages', () => {
     const response = await worker.fetch(post('/api/scan/page', { handle, author: 'another-user', cursor: 'attacker-cursor' }), env);
     expect(response.status).toBe(200);
     const body = await response.json() as ScanPage;
-    expect(body.commits).toEqual([{ oid: 'b'.repeat(40), additions: 123, deletions: 12, committedDate: '2025-12-31T23:59:59Z', authorId: viewer.id, parentCount: 1 }]);
+    expect(body.commits).toEqual([{ oid: 'b'.repeat(40), additions: 123, deletions: 12, committedDate: '2025-12-31T23:59:59Z', authorId: viewer.id, parentCount: 1, headline: '', changedFiles: null, filesHandle: expect.any(String) }]);
     const next = await verify<Record<string, unknown>>(env, 'scan-page', body.nextHandle!);
     expect(next).toMatchObject({ headOid, after: 'github-next', asOf: first.asOf });
     const query = JSON.parse(String(githubFetch.mock.calls[1][1]?.body));
@@ -408,7 +408,7 @@ describe('signed scan pages', () => {
     const response = await worker.fetch(post('/api/scan/page', { handle, author: 'someone-else' }), env);
     expect(response.status).toBe(200);
     const data = await response.json() as ScanPage;
-    expect(data.commits.map(commit => commit.oid)).toEqual(['primary']);
+    expect(data.commits.map(commit => commit.oid)).toEqual([historyCommit('primary').oid]);
     expect(data.commits[0].authorId).toBe(viewer.id);
     expect(data.nextHandle).toBeNull();
   });

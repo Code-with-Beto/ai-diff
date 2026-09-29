@@ -1,27 +1,17 @@
-import type { AnalysisResult, CommitFilterSummary } from '../../shared/types';
+import type { AnalysisResult } from '../../shared/types';
 import { formatDate, formatNumber, OVERSIZED_COMMIT_THRESHOLD } from '../lib/analysis';
 import { describeCommitFilter } from '../lib/share';
 import './CommitFilter.css';
 
 const compactThreshold = (threshold: number) => new Intl.NumberFormat('en-US', { notation: 'compact' }).format(threshold).toLowerCase();
 
-export function CommitFilterControl({ enabled, scope, onEnabledChange, onScopeChange }: {
+export function CommitFilterControl({ enabled, onEnabledChange }: {
   enabled: boolean;
-  scope: CommitFilterSummary['scope'];
   onEnabledChange: (enabled: boolean) => void;
-  onScopeChange: (scope: CommitFilterSummary['scope']) => void;
 }) {
   return <section className="commit-filter-control" aria-label="Commit size filter">
     <label className="commit-filter-toggle"><input type="checkbox" checked={enabled} onChange={event => onEnabledChange(event.target.checked)} /><span>Skip oversized commits</span></label>
-    <p className="commit-filter-threshold">Over {compactThreshold(OVERSIZED_COMMIT_THRESHOLD)} added + deleted lines.</p>
-    <details className="commit-filter-options">
-      <summary>Options{enabled && scope === 'before' ? ' · before only' : ''}</summary>
-      <label className="commit-filter-scope">Apply to<select value={scope} disabled={!enabled} onChange={event => onScopeChange(event.target.value as CommitFilterSummary['scope'])}>
-        <option value="both">Both periods</option><option value="before">Before only (unequal filter)</option>
-      </select></label>
-      {enabled && scope === 'before' && <p>Different rules apply to each period. Large commits after your date stay included.</p>}
-      <p>Skips whole commits. Change the filter or turn it off without rescanning.</p>
-    </details>
+    <p className="commit-filter-threshold">Over {compactThreshold(OVERSIZED_COMMIT_THRESHOLD)} added + deleted lines after file filtering. Both periods.</p>
   </section>;
 }
 

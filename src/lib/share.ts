@@ -1,4 +1,4 @@
-import type { AnalysisResult, CommitFilterSummary, ShareResult } from '../../shared/types.ts';
+import type { AnalysisResult, CommitFilterSummary, FileFilterSummary, ShareResult } from '../../shared/types.ts';
 import { formatDate, formatNumber } from './analysis.ts';
 
 import { isShareResult as validShare } from '../../shared/share-validation.ts';
@@ -13,6 +13,13 @@ export function describeCommitFilter(filter?: CommitFilterSummary): string {
   return `Size filter: >${formatNumber(filter.threshold)} changed lines · ${formatNumber(excluded)} commit${excluded === 1 ? '' : 's'} excluded · ${filter.scope === 'both' ? 'both periods' : 'before only (unequal filter)'}`;
 }
 
+export function describeFileFilter(filter: FileFilterSummary): string {
+  const incomplete = filter.uninspectedBefore.commits + filter.uninspectedAfter.commits;
+  const inspection = `File inspection: ${formatNumber(filter.inspectedCommits)} complete, ${formatNumber(incomplete)} incomplete.`;
+  if (!filter.enabled) return `Dependency lockfiles/checksums included. ${inspection} Uninspected commits retain raw line counts, subject to the size filter.`;
+  const removed = `Dependency lockfiles/checksums excluded in both periods: before ${formatNumber(filter.excludedBefore.additions)} additions / ${formatNumber(filter.excludedBefore.deletions)} deletions; after ${formatNumber(filter.excludedAfter.additions)} additions / ${formatNumber(filter.excludedAfter.deletions)} deletions.`;
+  return `${removed} ${inspection}${incomplete > 0 ? ` Partial results: uninspected commits omitted (${formatNumber(filter.uninspectedBefore.commits)} before, ${formatNumber(filter.uninspectedAfter.commits)} after).` : ''}`;
+}
 
 function toBase64Url(bytes: Uint8Array): string {
   return btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
@@ -50,6 +57,14 @@ export function createShareResult(login: string, result: AnalysisResult, sample 
       enabled: result.commitFilter.enabled, threshold: result.commitFilter.threshold, scope: result.commitFilter.scope,
       excludedBefore: { ...result.commitFilter.excludedBefore }, excludedAfter: { ...result.commitFilter.excludedAfter },
     } } : {}),
+    ...(result.fileFilter ? { fileFilter: {
+      enabled: result.fileFilter.enabled,
+      excludedBefore: { additions: result.fileFilter.excludedBefore.additions, deletions: result.fileFilter.excludedBefore.deletions },
+      excludedAfter: { additions: result.fileFilter.excludedAfter.additions, deletions: result.fileFilter.excludedAfter.deletions },
+      inspectedCommits: result.fileFilter.inspectedCommits,
+      uninspectedBefore: { additions: result.fileFilter.uninspectedBefore.additions, deletions: result.fileFilter.uninspectedBefore.deletions, commits: result.fileFilter.uninspectedBefore.commits },
+      uninspectedAfter: { additions: result.fileFilter.uninspectedAfter.additions, deletions: result.fileFilter.uninspectedAfter.deletions, commits: result.fileFilter.uninspectedAfter.commits },
+    } } : {}),
   };
   if (!validShare(snapshot)) throw new Error('This result cannot be shared. Finish a valid analysis first.');
   return snapshot;
@@ -81,6 +96,7 @@ export function createShareText(result: ShareResult): string {
     `Coverage: ${result.coverage.completed}/${result.coverage.total} repositories complete${partial ? `; partial results (${result.coverage.incomplete} incomplete, ${result.coverage.unavailable} unavailable)` : ''}.`,
     result.includesPrivate ? `${result.sample ? 'Includes fictional private' : 'Includes private'} repository totals.` : 'Public repository totals only.',
     describeCommitFilter(result.commitFilter),
+    ...(result.fileFilter ? [describeFileFilter(result.fileFilter)] : []),
     'Different time spans. Self-reported Git activity, not a productivity measure or proof of AI use.',
     'Explore yours with AI Diff by Code with Beto: https://aidiff.cwb.sh',
   ].join('\n');
@@ -135,18 +151,23 @@ export async function renderShareImage(result: ShareResult, theme: ShareImageThe
   };
   const wrappedContext = (value: string) => {
     const words = value.split(' ');
-    const lines: string[] = [];
-    let line = '';
-    c.font = font(16, 400);
-    for (const word of words) {
-      const next = line ? `${line} ${word}` : word;
-      if (line && c.measureText(next).width > 1088 && lines.length === 0) {
-        lines.push(line);
-        line = word;
-      } else line = next;
-    }
-    if (line) lines.push(line);
-    lines.forEach((value, index) => text(value, 600, 480 + index * 22, 16, colors.muted, 400, 1088, 14, 'center'));
+    let lines: string[] = [];
+    let size = 17;
+    do {
+      size -= 1;
+      c.font = font(size, 400);
+      lines = [];
+      let line = '';
+      for (const word of words) {
+        const next = line ? `${line} ${word}` : word;
+        if (line && c.measureText(next).width > 1088) {
+          lines.push(line);
+          line = word;
+        } else line = next;
+      }
+      if (line) lines.push(line);
+    } while (lines.length > 3 && size > 14);
+    lines.forEach((value, index) => text(value, 600, 480 + index * 22, size, colors.muted, 400, 1088, 14, 'center'));
   };
 
   text(`@${result.login}`, 56, 64, 22, colors.text, 550);
@@ -195,7 +216,9 @@ export async function renderShareImage(result: ShareResult, theme: ShareImageThe
     }
   }
 
-  const partial = result.coverage.incomplete > 0 || result.coverage.unavailable > 0;
+  const fileFilter = result.fileFilter;
+  const incompleteFiles = fileFilter?.enabled ? fileFilter.uninspectedBefore.commits + fileFilter.uninspectedAfter.commits : 0;
+  const partial = result.coverage.incomplete > 0 || result.coverage.unavailable > 0 || incompleteFiles > 0;
   const contextParts = [
     `${partial ? 'Partial · ' : ''}${result.coverage.completed}/${result.coverage.total} repos complete`,
     ...(result.includesPrivate ? ['Includes private totals'] : []),
@@ -206,6 +229,10 @@ export async function renderShareImage(result: ShareResult, theme: ShareImageThe
     if (filter.scope === 'before' || excluded > 0) {
       contextParts.push(`${formatNumber(excluded)} commit${excluded === 1 ? '' : 's'} excluded (>100k changed lines; ${filter.scope === 'before' ? 'before only, unequal filter' : 'both periods'})`);
     }
+  }
+  if (fileFilter) {
+    contextParts.push(`Lockfiles/checksums ${fileFilter.enabled ? 'excluded' : 'included'}`);
+    if (incompleteFiles > 0) contextParts.push(`Uninspected commits omitted: ${formatNumber(fileFilter.uninspectedBefore.commits)} before / ${formatNumber(fileFilter.uninspectedAfter.commits)} after`);
   }
   wrappedContext(contextParts.join(' · '));
   text('aidiff.cwb.sh · Code with Beto', 600, 552, 18, colors.muted, 400, 1088, 14, 'center');

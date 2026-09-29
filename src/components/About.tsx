@@ -11,10 +11,10 @@ export default function About() {
       <article className="about-article" aria-label="AI Diff methodology and privacy">
         <section id="the-numbers" aria-labelledby="numbers-heading">
           <h2 id="numbers-heading">What it measures</h2>
-          <p>We count <strong>lines added in commits</strong> you authored, including code, documentation, lockfiles, generated text, and repeated edits. Add a line, delete it, and add it again: both additions count.</p>
+          <p>We count <strong>lines added in commits</strong> you authored, including code, documentation, generated text, and repeated edits. Add a line, delete it, and add it again: both additions count.</p>
           <p>Imported projects, templates, generated files, and lockfiles can inflate additions even when GitHub matches the commit’s primary author to your account. A root commit can add an existing codebase in one step; author matching does not prove that you wrote every line.</p>
-          <p>By default, we skip entire commits with more than 100,000 added and deleted lines combined, using the same rule before and after your date. A short notice links to excluded totals and the largest commits. You can turn the filter off without rescanning. Filter options also include a before-only scope, labeled as an unequal filter.</p>
-          <p>This is a size heuristic, not file-level filtering. Smaller commits can still contain generated code, and large legitimate commits may be excluded. Shared images and links disclose the filter and exclusion count.</p>
+          <p>By default, we remove dependency lockfiles and checksums first, then skip entire commits with more than 100,000 remaining added and deleted lines combined. The same rules apply before and after your date. You can inspect the monthly commit and file breakdown or turn either filter off without rescanning.</p>
+          <p>The file filter recognizes specific lockfile and checksum names. It does not identify every generated file, and the size filter can exclude large legitimate commits. Shared images, text, and links disclose filters and incomplete file inspection. Older shares keep their original calculation, including any before-only size filter labeled as unequal.</p>
           <p>This measures commit activity. It cannot identify which lines AI wrote, measure code quality, or tell you how productive you were. A smaller number can be a good thing.</p>
         </section>
 
@@ -30,7 +30,8 @@ export default function About() {
           <p>Results cover <strong>selected GitHub repository history</strong>, not your entire career. Deleted or inaccessible repositories, work outside the default branch, uncommitted work, and old author identities that GitHub cannot connect to your account can be missing. Co-author credits do not count as primary authorship.</p>
           <p>Automatic discovery includes your owned public repositories and repositories GitHub lists as recently contributed to. It does not include every organization you have worked in. Enter an organization’s GitHub handle or URL to load its public repositories, or add a public repository by URL. Archived repositories are included. Forks are excluded from discovery, manual additions, and analysis.</p>
           <p>Private organization repositories require a GitHub App installation with access to the repositories you choose. You also need access through your own GitHub account. Organization owners may need to approve installation, and organization policies or SSO requirements can limit access.</p>
-          <p>Every result shows completed, unavailable, and incomplete repositories. A cancelled or interrupted scan is a partial result. Large histories can take longer, and GitHub’s API limits may temporarily pause a scan.</p>
+          <p>Every result shows completed, unavailable, and incomplete repositories. File inspection has separate coverage: with lockfile filtering on, commits whose files could not be fully inspected are omitted and the result stays partial. With that filter off, known raw line counts can still count, subject to the size filter. A commit containing only excluded lockfiles counts as a commit with zero added or deleted lines.</p>
+          <p>A cancelled or interrupted scan is a partial result. Large histories can take longer. GitHub’s API limits, response-size limits, and incomplete file lists can prevent full inspection.</p>
         </section>
 
         <section id="comparison-date" aria-labelledby="date-heading">
@@ -42,7 +43,7 @@ export default function About() {
         <section id="privacy" aria-labelledby="privacy-heading">
           <h2 id="privacy-heading">Privacy and permissions</h2>
           <p>Public repositories work with GitHub sign-in. Private repositories are optional and require installing our read-only GitHub App on repositories you select.</p>
-          <p>GitHub’s Contents permission technically allows reading code. AI Diff requests commit metadata and line counts. It does not fetch source files, clone repositories, or send code to an AI model.</p>
+          <p>GitHub’s Contents permission technically allows reading code. AI Diff requests commit and file metadata with line counts. GitHub’s file responses may include patches containing source-code context; our server discards patches before returning file metadata to your browser, and does not log, cache, or store those responses. We do not fetch individual source files, clone repositories, or send code to an AI model.</p>
           <p>Your GitHub credential is encrypted in an expiring, HttpOnly session cookie. Our server uses it for the requested GitHub reads; client-side JavaScript cannot read it. We do not keep refresh tokens. Disconnecting clears the session and attempts to revoke its GitHub token.</p>
           <p>Analysis data lives in your browser’s memory. Scanning does not save a report or upload a sharing image. We store an aggregate summary and PNG only when you choose to create a public link. We do not record commit data in application logs or include third-party tracking scripts. Reloading starts a new analysis. Only your light/dark preference is saved in local browser storage. GitHub and our hosting provider still process requests to operate their services.</p>
         </section>
@@ -50,7 +51,7 @@ export default function About() {
         <section id="sharing" aria-labelledby="sharing-heading">
           <h2 id="sharing-heading">Sharing</h2>
           <p>Images are generated in your browser. You can preview, copy, or download one without uploading it. If private repositories contributed, their counts are included in the aggregate totals, but their names are left out.</p>
-          <p><strong>Create public link</strong> stores your aggregate summary and the exact preview image so the short link can show your result on social platforms. Publishing a real result requires GitHub sign-in with the same handle. Sharing private totals requires explicit consent; repository names, source code, and raw commits are left out.</p>
+          <p><strong>Create public link</strong> stores your aggregate summary and the exact preview image so the short link can show your result on social platforms. Publishing a real result requires GitHub sign-in with the same handle. Sharing private totals requires explicit consent; file paths, repository names, source code, and raw commits are left out.</p>
           <p>Anyone with a public link can view and reshare it. Published snapshots do not expire automatically, and social platforms may keep cached copies. Disconnecting GitHub does not remove a published result. Opening a result does not fetch GitHub again, and shared numbers and image claims are not independently verified.</p>
           <p>Older long links still work: their aggregate summary follows <code>#</code> in the URL and is not sent to our server. They use AI Diff’s generic social preview until you choose to create a public link. Downloads and long links remain available if public-link publishing reaches the free limits.</p>
         </section>

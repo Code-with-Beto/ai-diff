@@ -193,6 +193,43 @@ describe('authenticated aggregate and PNG publishing', () => {
 });
 
 describe('public share pages and PNG previews', () => {
+  it.each([true, false])('preserves aggregate file filtering in stored shares and reports incomplete clean results (enabled=%s)', async enabled => {
+    const snapshot: ShareResult = {
+      ...result, coverage: { completed: 6, unavailable: 0, incomplete: 0, total: 6 },
+      fileFilter: {
+        enabled, inspectedCommits: enabled ? 300 : 298,
+        excludedBefore: { additions: enabled ? 400 : 0, deletions: enabled ? 100 : 0 },
+        excludedAfter: { additions: enabled ? 800 : 0, deletions: enabled ? 200 : 0 },
+        uninspectedBefore: { additions: 1_000, deletions: 10, commits: 2 }, uninspectedAfter: { additions: 0, deletions: 0, commits: 0 },
+      },
+    };
+    const response = await worker.fetch(post(upload({ result: snapshot })), env);
+    expect(response.status).toBe(201);
+    const published = await response.json() as { url: string };
+    const html = await (await worker.fetch(publicRequest(new URL(published.url).pathname), env)).text();
+    expect(decodeShare(meta(html, 'ai-diff-result')!)).toEqual(snapshot);
+    const description = meta(html, 'og:description')!;
+    expect(description).toContain(`Dependency lockfiles/checksums ${enabled ? 'excluded from both periods' : 'included'}.`);
+    if (enabled) {
+      expect(description).toContain('Partial results: 6/6 repositories complete.');
+      expect(description).toContain('File inspection incomplete: 2 before and 0 after commits omitted.');
+    } else expect(description).not.toMatch(/Partial results|commits omitted/);
+    expect(meta(html, 'twitter:description')).toBe(description);
+    expect(kvPut).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects file-filter metadata containing private identifiers before publishing', async () => {
+    const snapshot = { ...result, fileFilter: {
+      enabled: true, inspectedCommits: 300, excludedBefore: { additions: 0, deletions: 0 }, excludedAfter: { additions: 0, deletions: 0 },
+      uninspectedBefore: { additions: 0, deletions: 0, commits: 0 }, uninspectedAfter: { additions: 0, deletions: 0, commits: 0 },
+      filename: 'private/project/package-lock.json',
+    } };
+    const response = await worker.fetch(post(upload({ result: snapshot })), env);
+    expect(response.status).toBe(400);
+    expect(kvPut).not.toHaveBeenCalled();
+    expect(await response.text()).not.toContain('private/project');
+  });
+
   it.each(['light', 'dark'] as const)('serves real %s metadata and the same PNG, with public GET/HEAD and configured canonical origin', async theme => {
     const published = await publish(theme);
     const path = new URL(published.url).pathname;

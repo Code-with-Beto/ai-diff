@@ -22,9 +22,18 @@ for (let year = 2019; year <= 2026; year += 1) {
       const day = 1 + Math.floor(index * 27 / count);
       const committedDate = new Date(Date.UTC(year, month, day, 12, index % 60)).toISOString();
       const additions = later ? 600 + ((sequence * 157) % 2100) : 45 + ((sequence * 73) % 260);
+      const deletions = Math.floor(additions * (later ? 0.27 : 0.39));
+      const locks = Math.floor(additions * .18), lockDeletions = Math.floor(deletions * .18);
+      const repository = SAMPLE_REPOSITORIES[(sequence - 1) % SAMPLE_REPOSITORIES.length];
       SAMPLE_COMMITS.push({
-        oid: sequence.toString(16).padStart(40, '0'), committedDate, additions,
-        deletions: Math.floor(additions * (later ? 0.27 : 0.39)),
+        oid: ((sequence * 2654435761) >>> 0).toString(16).padStart(8, '0').padEnd(40, '0'), committedDate, additions,
+        deletions,
+        repository: { id: repository.id, nameWithOwner: repository.nameWithOwner, isPrivate: repository.isPrivate },
+        headline: index === 0 ? 'Build a new feature' : 'Refine the app', changedFiles: 2, filesComplete: true,
+        files: [
+          { filename: 'src/app.tsx', status: 'modified', additions: additions - locks, deletions: deletions - lockDeletions },
+          { filename: 'package-lock.json', status: 'modified', additions: locks, deletions: lockDeletions },
+        ],
         authorId: SAMPLE_USER.id, parentCount: sequence === 1 ? 0 : 1,
       });
       sequence += 1;

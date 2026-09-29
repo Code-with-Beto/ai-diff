@@ -35,6 +35,14 @@
       }
     },
     {
+      "name": "FILE_LIMITER",
+      "namespace_id": "1004",
+      "simple": {
+        "limit": 360,
+        "period": 60
+      }
+    },
+    {
       "name": "SHARE_LIMITER",
       "namespace_id": "1003",
       "simple": {

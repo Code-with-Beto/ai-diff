@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createShareResult, createShareText, createShareUrl, decodeShare, describeAdditionChange, encodeShare, MAX_SHARE_PAYLOAD_LENGTH, renderShareImage } from '../src/lib/share.ts';
 import type { ShareImageTheme } from '../src/lib/share.ts';
 import { analyzeCommits } from '../src/lib/analysis.ts';
-import type { ShareResult } from '../shared/types.ts';
+import type { AnalysisResult, ShareResult } from '../shared/types.ts';
 
 const fixture: ShareResult = {
   version: 1, login: 'octo-dev', cutoff: '2025-09-29', asOf: '2026-09-29T12:00:00.000Z',
@@ -11,6 +11,13 @@ const fixture: ShareResult = {
   coverage: { completed: 3, unavailable: 1, incomplete: 2, total: 6 }, includesPrivate: true, sample: false,
 };
 const raw = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url');
+const cleanFixture: ShareResult = {
+  ...fixture, coverage: { completed: 6, unavailable: 0, incomplete: 0, total: 6 },
+  fileFilter: {
+    enabled: true, excludedBefore: { additions: 400, deletions: 100 }, excludedAfter: { additions: 800, deletions: 200 }, inspectedCommits: 300,
+    uninspectedBefore: { additions: 1_000, deletions: 10, commits: 2 }, uninspectedAfter: { additions: 0, deletions: 0, commits: 0 },
+  },
+};
 
 async function recordImage(snapshot: ShareResult, theme?: ShareImageTheme) {
   const labels: { value: string; x: number; y: number; size: number; weight: number; width: number; color: string }[] = [];
@@ -114,6 +121,87 @@ describe('aggregate sharing', () => {
     expect(text).not.toContain('/share#');
     expect(text).not.toContain(encodeShare(fixture));
     expect(createShareText(fixture)).toContain('Includes private repository totals.');
+  });
+});
+
+describe('file-filter aggregate sharing', () => {
+  it('round-trips clean and raw inspection summaries while preserving legacy snapshots unchanged', () => {
+    const rawSnapshot: ShareResult = { ...cleanFixture, fileFilter: { ...cleanFixture.fileFilter!, enabled: false, inspectedCommits: 298, excludedBefore: { additions: 0, deletions: 0 }, excludedAfter: { additions: 0, deletions: 0 } } };
+    for (const value of [fixture, cleanFixture, rawSnapshot]) expect(decodeShare(encodeShare(value))).toEqual(value);
+    expect(decodeShare(encodeShare(fixture))).not.toHaveProperty('fileFilter');
+  });
+
+  it('copies only aggregate fields even when analysis contains private drilldown records', () => {
+    const analysis = {
+      ...cleanFixture, months: [{ month: '2025-01', before: 1, after: 0 }], ratio: 3,
+      details: [{ oid: 'private-sha', headline: 'private-headline', files: [{ filename: 'secret/package-lock.json', patch: 'private-source' }], repository: { nameWithOwner: 'secret/repository' } }],
+      fileFilter: { ...cleanFixture.fileFilter!, filename: 'secret/yarn.lock', excludedBefore: { ...cleanFixture.fileFilter!.excludedBefore, filename: 'secret/go.sum' } },
+    } as unknown as AnalysisResult;
+    const snapshot = createShareResult('octo-dev', analysis);
+    expect(snapshot.fileFilter).toEqual(cleanFixture.fileFilter);
+    expect(JSON.stringify(snapshot)).not.toMatch(/secret|private-sha|private-headline|private-source|filename|headline|months|details/);
+    expect(snapshot.fileFilter).not.toBe(analysis.fileFilter);
+    expect(snapshot.fileFilter?.uninspectedBefore).not.toBe(analysis.fileFilter?.uninspectedBefore);
+  });
+
+  it('accepts disjoint lockfile removals, remaining-size exclusions, and uninspected raw omissions', () => {
+    const value: ShareResult = {
+      ...cleanFixture,
+      commitFilter: { enabled: true, threshold: 100_000, scope: 'both', excludedBefore: { additions: 100_001, deletions: 0, commits: 1 }, excludedAfter: { additions: 0, deletions: 0, commits: 0 } },
+      fileFilter: { ...cleanFixture.fileFilter!, inspectedCommits: 301 },
+    };
+    expect(decodeShare(encodeShare(value))).toEqual(value);
+    const allUninspected: ShareResult = { ...cleanFixture, firstCommitAt: null, before: { additions: 0, deletions: 0, commits: 0 }, after: { additions: 0, deletions: 0, commits: 0 }, fileFilter: { ...cleanFixture.fileFilter!, inspectedCommits: 0, excludedBefore: { additions: 0, deletions: 0 }, excludedAfter: { additions: 0, deletions: 0 } } };
+    expect(decodeShare(encodeShare(allUninspected))).toEqual(allUninspected);
+    const lockfilesOnly: ShareResult = { ...cleanFixture, before: { ...cleanFixture.before, additions: 0, deletions: 0 }, after: { ...cleanFixture.after, additions: 0, deletions: 0 } };
+    expect(decodeShare(encodeShare(lockfilesOnly))).toEqual(lockfilesOnly);
+  });
+
+  it.each([
+    null,
+    { ...cleanFixture.fileFilter, enabled: 'true' },
+    { ...cleanFixture.fileFilter, enabled: false },
+    { ...cleanFixture.fileFilter, inspectedCommits: 299 },
+    { ...cleanFixture.fileFilter, inspectedCommits: Infinity },
+    { ...cleanFixture.fileFilter, inspectedCommits: 0 },
+    { ...cleanFixture.fileFilter, filename: 'secret/yarn.lock' },
+    { ...cleanFixture.fileFilter, excludedBefore: { additions: 1, deletions: 0, filename: 'secret/yarn.lock' } },
+    { ...cleanFixture.fileFilter, excludedBefore: { additions: -1, deletions: 0 } },
+    { ...cleanFixture.fileFilter, excludedBefore: { additions: 1.5, deletions: 0 } },
+    { ...cleanFixture.fileFilter, excludedBefore: { additions: Number.MAX_SAFE_INTEGER, deletions: 0 } },
+    { ...cleanFixture.fileFilter, uninspectedBefore: { additions: 1, deletions: 0, commits: 0 } },
+    { ...cleanFixture.fileFilter, uninspectedBefore: { additions: 0, deletions: 0, commits: Number.MAX_SAFE_INTEGER } },
+    { ...cleanFixture.fileFilter, uninspectedBefore: { additions: Number.MAX_SAFE_INTEGER, deletions: 0, commits: 1 } },
+    { ...cleanFixture.fileFilter, uninspectedAfter: { additions: 0, deletions: 0, commits: 0, repository: 'secret/repository' } },
+  ])('rejects malformed, inconsistent, overflowing or identifying filter metadata %#', fileFilter => {
+    const value = { ...cleanFixture, fileFilter } as ShareResult;
+    expect(decodeShare(raw(value))).toBeNull();
+    expect(() => encodeShare(value)).toThrow();
+  });
+
+  it('rejects raw-mode inspection counts larger than their counted period and clean after-omissions beyond the snapshot', () => {
+    const files = { ...cleanFixture.fileFilter!, enabled: false, inspectedCommits: 298, excludedBefore: { additions: 0, deletions: 0 }, excludedAfter: { additions: 0, deletions: 0 } };
+    expect(decodeShare(raw({ ...cleanFixture, fileFilter: { ...files, uninspectedBefore: { additions: 20_001, deletions: 0, commits: 2 } } }))).toBeNull();
+    expect(decodeShare(raw({ ...cleanFixture, fileFilter: { ...files, inspectedCommits: 199, uninspectedBefore: { additions: 0, deletions: 0, commits: 101 } } }))).toBeNull();
+    expect(decodeShare(raw({ ...cleanFixture, fileFilter: { ...files, inspectedCommits: 200, uninspectedBefore: { additions: 0, deletions: 0, commits: 100 } } }))).toBeNull();
+    expect(decodeShare(raw({ ...cleanFixture, cutoff: '2100-01-01', after: { additions: 0, deletions: 0, commits: 0 }, fileFilter: { ...cleanFixture.fileFilter!, inspectedCommits: 100, excludedAfter: { additions: 0, deletions: 0 }, uninspectedAfter: { additions: 1, deletions: 0, commits: 1 } } }))).toBeNull();
+  });
+
+  it('discloses file-only incompleteness and lockfile removals without describing raw totals as omitted', async () => {
+    const text = createShareText(cleanFixture);
+    expect(text).toContain('6/6 repositories complete.');
+    expect(text).toContain('Dependency lockfiles/checksums excluded in both periods: before 400 additions / 100 deletions; after 800 additions / 200 deletions.');
+    expect(text).toContain('File inspection: 300 complete, 2 incomplete. Partial results: uninspected commits omitted (2 before, 0 after).');
+    const image = await recordImage(cleanFixture);
+    const context = image.labels.map(label => label.value).join(' ');
+    expect(context).toContain('Partial · 6/6 repos complete');
+    expect(context).toContain('Lockfiles/checksums excluded');
+    expect(context).toContain('Uninspected commits omitted: 2 before / 0 after');
+    const rawSnapshot: ShareResult = { ...cleanFixture, fileFilter: { ...cleanFixture.fileFilter!, enabled: false, inspectedCommits: 298, excludedBefore: { additions: 0, deletions: 0 }, excludedAfter: { additions: 0, deletions: 0 } } };
+    expect(createShareText(rawSnapshot)).toContain('Uninspected commits retain raw line counts, subject to the size filter.');
+    const rawImage = (await recordImage(rawSnapshot)).labels.map(label => label.value).join(' ');
+    expect(rawImage).toContain('Lockfiles/checksums included');
+    expect(rawImage).not.toMatch(/Partial|omitted/);
   });
 });
 
@@ -285,7 +373,11 @@ describe('share image comparison', () => {
     };
     const unequal: ShareResult = { ...filtered, commitFilter: { ...filtered.commitFilter!, scope: 'before', excludedAfter: { additions: 0, deletions: 0, commits: 0 } } };
     const futureCutoff: ShareResult = { ...large, cutoff: '2100-12-31', after: { additions: 0, deletions: 0, commits: 0 } };
-    for (const snapshot of [large, filtered, unequal, futureCutoff]) {
+    const fileFiltered: ShareResult = { ...unequal, fileFilter: {
+      enabled: true, inspectedCommits: 40_000_000_300, excludedBefore: { additions: 1_000, deletions: 1_000 }, excludedAfter: { additions: 1_000, deletions: 1_000 },
+      uninspectedBefore: { additions: 1_000, deletions: 1_000, commits: 4_000_000_000_000_000 }, uninspectedAfter: { additions: 1_000, deletions: 1_000, commits: 4_000_000_000_000_000 },
+    } };
+    for (const snapshot of [large, filtered, unequal, futureCutoff, fileFiltered]) {
       const { labels } = await recordImage(snapshot);
       for (const label of labels) {
         expect(label.x).toBeGreaterThanOrEqual(56);

@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Check, ChevronDown, CircleHelp, Github, LockKeyhole, LogOut, Plus, Search, Square, X } from 'lucide-react';
-import type { AnalysisResult, CommitRecord, InstallationsPage, Repository, RepositoryPage, RepositoryProgress, ScanPage, ScanStart, SessionInfo, ShareResult } from '../shared/types';
+import type { AnalysisResult, CommitRecord, InstallationsPage, Repository, RepositoryPage, RepositoryProgress, FileScanPage, ScanPage, ScanStart, SessionInfo, ShareResult } from '../shared/types';
 import { ApiError, api, waitForRetry } from './api';
 import { analyzeCommits, formatDate, formatNumber } from './lib/analysis';
 import { SAMPLE_AS_OF, SAMPLE_COMMITS, SAMPLE_REPOSITORIES, SAMPLE_USER } from './lib/sample';
 import { createShareResult, decodeShare, describeAdditionChange } from './lib/share';
 import { readPublishedShare } from './lib/published-share';
+import { inspectCommitFiles } from './lib/file-scan';
 import { isNonForkRepository } from '../shared/repository-policy';
 import { callbackMessage, comparisonDateAllowed, createOperationScope, isAuthenticationError, parseRepositorySource } from './lib/client-state';
 import About from './components/About';
@@ -27,6 +28,8 @@ function Footer() {
   return <footer className="site-footer"><a href="https://codewithbeto.dev" target="_blank" rel="noreferrer">by Code with Beto</a><a href="https://github.com/Code-with-Beto/ai-diff" target="_blank" rel="noreferrer">GitHub</a><a href="/about#privacy">Privacy</a></footer>;
 }
 function Result({ result, login, sample, share, shared = false }: { result: AnalysisResult; login: string; sample: boolean; share: () => void; shared?: boolean }) {
+  const missingFiles = (result.fileFilter?.uninspectedBefore.commits ?? 0) + (result.fileFilter?.uninspectedAfter.commits ?? 0);
+  const removedLockLines = (result.fileFilter?.excludedBefore.additions ?? 0) + (result.fileFilter?.excludedAfter.additions ?? 0);
   const all = result.before.additions + result.after.additions;
   const partial = result.coverage.incomplete > 0 || result.coverage.unavailable > 0;
   const cutoffTime = Date.parse(`${result.cutoff}T00:00:00.000Z`);
@@ -58,8 +61,9 @@ function Result({ result, login, sample, share, shared = false }: { result: Anal
       </div>
       <p className="comparison-insight">{describeAdditionChange(result.before.additions, result.after.additions)}</p>
     </div>
+    {result.fileFilter?.enabled && <p className="file-filter-note">Lockfiles excluded · {formatNumber(removedLockLines)} added lines removed from both periods{missingFiles > 0 && <><br /><span role="status">Partial file coverage: {formatNumber(missingFiles)} commits without complete file checks are not included.</span></>}</p>}
     <CommitFilterNotice result={result} />
-    {result.months.length > 0 && <MonthlyChart months={result.months} cutoff={result.cutoff} />}
+    {result.months.length > 0 && <MonthlyChart months={result.months} cutoff={result.cutoff} details={result.details} excludeLockfiles={result.fileFilter?.enabled} />}
     <div className="secondary-stats">
       <div><span>Commits counted</span><strong>{formatNumber(result.before.commits + result.after.commits)}</strong></div>
       <div><span>Lines deleted</span><strong>{formatNumber(result.before.deletions + result.after.deletions)}</strong></div>
@@ -68,7 +72,7 @@ function Result({ result, login, sample, share, shared = false }: { result: Anal
     <div className="result-bottom">
       <p className="coverage-line"><strong>{result.coverage.completed}/{result.coverage.total}</strong> repositories complete · {result.includesPrivate ? 'includes private totals' : 'public history'}</p>
       {partial && <p className="partial-note" role="status">Partial result: {result.coverage.unavailable} unavailable, {result.coverage.incomplete} incomplete.</p>}
-      <p className="small-text">Includes docs, lockfiles, generated files, and repeated edits.</p>
+      <p className="small-text">{result.fileFilter?.enabled ? 'Lockfiles excluded. Still includes docs, scaffolding, generated files, and repeated edits.' : 'Includes docs, lockfiles, generated files, and repeated edits.'}</p>
     </div>
   </section>;
 }
@@ -79,7 +83,7 @@ export default function App() {
   const [connectionExpired, setConnectionExpired] = useState(false);
   const [cutoff, setCutoff] = useState(DEFAULT_DATE), [customDate, setCustomDate] = useState(false);
   const [skipOversized, setSkipOversized] = useState(true);
-  const [filterScope, setFilterScope] = useState<'both' | 'before'>('both');
+  const [excludeLockfiles, setExcludeLockfiles] = useState(true);
   const [sample, setSample] = useState(false), [repositories, setRepositories] = useState<Repository[]>([]), [selected, setSelected] = useState<Set<string>>(new Set());
   const [loadingRepos, setLoadingRepos] = useState(false), [addingRepo, setAddingRepo] = useState(false), [installing, setInstalling] = useState(false);
   const [search, setSearch] = useState(''), [repoUrl, setRepoUrl] = useState(''), [sourceNotice, setSourceNotice] = useState('');
@@ -263,6 +267,7 @@ export default function App() {
     let states: RepositoryProgress[] = chosen.map(repository => ({ repository, status: 'pending', commits: 0 }));
     setProgress([...states]);
     let allCommits: CommitRecord[] = [];
+    const inspectedBySha = new Map<string, CommitRecord>();
     let interrupted = false;
     function update(index: number, patch: Partial<RepositoryProgress>) {
       if (!task.isCurrent()) return;
@@ -286,7 +291,7 @@ export default function App() {
       for (let index = 0; index < chosen.length; index++) {
         if (!task.isActive()) break;
         const repositoryCommitStart = allCommits.length;
-        const repo = chosen[index]; update(index, { status: 'scanning' }); setScanMessage(`Reading ${repo.nameWithOwner}`);
+        const repo = chosen[index]; let fileFailures = 0; update(index, { status: 'scanning' }); setScanMessage(`Reading ${repo.nameWithOwner}`);
         try {
           const start = await request<ScanStart>('/api/scan/start', { repositoryId: repo.id, includePrivate, asOf: snapshotTime });
           if (!task.isActive()) break;
@@ -296,7 +301,28 @@ export default function App() {
           while (handle && task.isActive()) {
             const page = await request<ScanPage>('/api/scan/page', { handle });
             if (!task.isActive()) break;
-            allCommits = allCommits.concat(page.commits); setCommits([...allCommits]);
+            const received = page.commits.map(commit => ({ ...commit, repository: { id: start.repository.id, nameWithOwner: start.repository.nameWithOwner, isPrivate: start.repository.isPrivate } }));
+            const offset = allCommits.length;
+            allCommits = allCommits.concat(received); setCommits([...allCommits]);
+            for (let position = 0; position < received.length && task.isActive(); position++) {
+              const commit = received[position];
+              if (commit.parentCount > 1 || commit.authorId !== session?.user?.id) continue;
+              setScanMessage(`Checking files in ${repo.nameWithOwner} · ${formatNumber(inspectedBySha.size)} commits checked`);
+              try {
+                const previous = inspectedBySha.get(commit.oid);
+                const inspected = previous?.filesComplete
+                  ? { ...commit, files: previous.files, filesComplete: true }
+                  : await inspectCommitFiles(commit, fileHandle => request<FileScanPage>('/api/scan/files', { handle: fileHandle }), task.signal);
+                inspectedBySha.set(commit.oid, inspected);
+                allCommits[offset + position] = inspected;
+              } catch (value) {
+                if (!task.isActive() || isAuthenticationError(value) || (value instanceof ApiError && ['invalid_scan', 'invalid_file_scan', 'forks_excluded', 'repository_visibility_changed', 'repository_unavailable'].includes(value.code))) throw value;
+                fileFailures += 1;
+                allCommits[offset + position] = { ...commit, filesComplete: false, filesError: value instanceof Error ? value.message : 'File statistics unavailable.' };
+              }
+              if (task.isActive()) setCommits([...allCommits]);
+            }
+            if (!task.isActive()) break;
             update(index, { commits: states[index].commits + page.commits.length });
             handle = page.nextHandle;
             setScanMessage(`Reading ${repo.nameWithOwner} · ${formatNumber(allCommits.length)} commits received`);
@@ -306,7 +332,7 @@ export default function App() {
               await waitForRetry(delay, task.signal);
             }
           }
-          if (task.isActive()) update(index, { status: 'complete' });
+          if (task.isActive()) update(index, { status: 'complete', ...(fileFailures ? { message: `${fileFailures} commits could not finish file checks. They are excluded while lockfile filtering is on.` } : {}) });
         } catch (value) {
           if (!task.isActive()) break;
           if (value instanceof ApiError && value.code === 'forks_excluded') {
@@ -321,21 +347,27 @@ export default function App() {
           const message = value instanceof Error ? value.message : 'Could not finish this repository.';
           update(index, { status: states[index].commits ? 'incomplete' : 'unavailable', message });
           if (isAuthenticationError(value)) { interrupted = true; expireSession(); break; }
-          if (value instanceof ApiError && value.code === 'invalid_scan') { interrupted = true; setError('This scan expired. Start a new scan to continue.'); break; }
+          if (value instanceof ApiError && ['invalid_scan', 'invalid_file_scan'].includes(value.code)) { interrupted = true; setError('This scan expired. Start a new scan to continue.'); break; }
         }
       }
     } finally {
       if (task.isCurrent()) {
-        states = states.filter(item => isNonForkRepository(item.repository)).map(item => item.status === 'pending' || item.status === 'scanning' ? { ...item, status: 'incomplete' } : item);
+        states = states.filter(item => isNonForkRepository(item.repository)).map(item => {
+          if (item.status === 'pending' || item.status === 'scanning') return { ...item, status: 'incomplete' };
+          if (item.status !== 'complete') return item;
+          const unchecked = new Set(allCommits.filter(commit => commit.repository?.id === item.repository.id && commit.parentCount <= 1 && commit.authorId === session?.user?.id && !inspectedBySha.get(commit.oid)?.filesComplete).map(commit => commit.oid)).size;
+          return { ...item, message: unchecked ? `${unchecked} commits could not finish file checks. They are excluded while lockfile filtering is on.` : undefined };
+        });
         setProgress([...states]); setScanning(false);
         const partial = states.some(item => item.status !== 'complete');
-        setScanMessage(task.signal.aborted ? 'Scan canceled. Results include only the history read so far.' : interrupted || partial ? 'Scan stopped with partial results. See repository coverage below.' : 'Scan finished.');
+        const incompleteFiles = states.some(item => item.status === 'complete' && !!item.message);
+        setScanMessage(task.signal.aborted ? 'Scan canceled. Results include only the history read so far.' : interrupted || partial ? 'Scan stopped with partial results. See repository coverage below.' : incompleteFiles ? 'History scan finished. Some file checks are incomplete; filtered totals omit those commits.' : 'Scan finished.');
         task.finish();
       }
     }
   }
   const preview = !authenticated && !sample && progress.length === 0;
-  const result = useMemo(() => analyzeCommits(preview ? SAMPLE_COMMITS : commits, sample || preview ? SAMPLE_USER.id : session?.user?.id ?? '', cutoff, preview ? SAMPLE_AS_OF : asOf, preview ? completeSample : progress, { enabled: skipOversized, scope: filterScope }), [preview, commits, sample, session, cutoff, asOf, progress, skipOversized, filterScope]);
+  const result = useMemo(() => analyzeCommits(preview ? SAMPLE_COMMITS : commits, sample || preview ? SAMPLE_USER.id : session?.user?.id ?? '', cutoff, preview ? SAMPLE_AS_OF : asOf, preview ? completeSample : progress, { enabled: skipOversized, scope: 'both', excludeLockfiles }), [preview, commits, sample, session, cutoff, asOf, progress, skipOversized, excludeLockfiles]);
   const maxCutoff = sample || preview ? SAMPLE_AS_OF.slice(0, 10) : progress.length ? asOf.slice(0, 10) : today();
   const visibleRepositories = repositories.filter(repo => isNonForkRepository(repo) && (sample || includePrivate || !repo.isPrivate) && repo.nameWithOwner.toLowerCase().includes(search.toLowerCase()));
   const selectedRepositories = repositories.filter(repo => isNonForkRepository(repo) && selected.has(repo.id) && (sample || includePrivate || !repo.isPrivate));
@@ -374,7 +406,7 @@ export default function App() {
       {sample ? <div className="sample-account"><p>Exploring a fictional account.</p><button className="text-button" onClick={exitSample}>Exit sample</button></div> : authenticated ? <div className="connected-account"><Github size={22} /><div><strong>{session?.user?.login}</strong><span><Check size={12} />Connected</span></div></div> : <><a href="/api/auth/github/start" className={`button primary connect-button ${!session?.configured ? 'disabled' : ''}`} aria-disabled={!session?.configured} onClick={e => { if (!session?.configured) e.preventDefault(); }}><Github size={18} />{connectionExpired ? 'Reconnect GitHub' : 'Connect GitHub'}</a><p className="permission-note">Read-only. Private repos optional.</p>{session && !session.configured && <p className="setup-notice">GitHub isn’t configured locally. Try the sample.</p>}{sessionFailed && <p className="setup-notice">Connection unavailable. <button className="text-button" onClick={() => window.location.reload()}>Retry</button></p>}<button className="sample-button" onClick={startSample}>Explore sample</button></>}
       </div><div className="setting-section date-settings"><div className="panel-step date-step"><h2>Comparison date</h2><ComparisonDateHelp /></div><label className="select-wrap"><span className="sr-only">AI start date preset</span><select value={customDate ? 'custom' : cutoff} onChange={e => { if (e.target.value === 'custom') setCustomDate(true); else { setCustomDate(false); setCutoff(e.target.value); } }}><option value="2025-11-24">Claude Opus 4.5</option><option value="2025-09-29">Claude Sonnet 4.5</option><option value="custom">My own date</option></select><ChevronDown size={16} /></label>{customDate ? <label className="date-label">My AI start date<input type="date" value={cutoff} max={maxCutoff} min="1970-01-01" onChange={e => { if (comparisonDateAllowed(e.target.value, maxCutoff)) setCutoff(e.target.value); }} /></label> : <p className="date-caption">{formatDate(cutoff)}<span>00:00 UTC</span></p>}</div>
       <div className="setting-section repo-settings"><div className="panel-step"><h2>Repositories</h2></div>{authenticated || sample ? <><p className="repo-scope-note">Only your authored commits. Forks excluded.</p><div className="repo-heading"><span>{sample ? '4 sample repositories' : `${selectedCount} selected`}</span>{loadingRepos && <span className="loading-label">Finding repos…</span>}</div><label className="search-wrap"><Search size={14} aria-hidden="true" /><input ref={repositorySearch} aria-keyshortcuts="/" placeholder="Find a repository…" value={search} onChange={e => setSearch(e.target.value)} aria-label="Filter repositories" disabled={scanning} /><kbd>/</kbd></label><div className="repo-controls"><button className="text-button" disabled={scanning || sample || loadingRepos || addingRepo} onClick={() => setSelected(previous => new Set([...previous, ...visibleRepositories.map(r => r.id)]))}>Select all</button><button className="text-button" disabled={scanning || sample || loadingRepos || addingRepo} onClick={() => setSelected(new Set())}>Clear</button></div><div className="repository-list">{visibleRepositories.map(repo => <label key={repo.id} className="repository-option"><input type="checkbox" checked={selected.has(repo.id)} disabled={scanning || sample || loadingRepos || addingRepo} onChange={e => setSelected(previous => { const next = new Set(previous); if (e.target.checked) next.add(repo.id); else next.delete(repo.id); return next; })} /><span title={repo.nameWithOwner}><span className="repo-owner">{repo.nameWithOwner.split('/')[0]}/</span>{repo.nameWithOwner.split('/').slice(1).join('/')}{repo.isArchived && <small>Archived</small>}</span>{repo.isPrivate ? <LockKeyhole size={13} /> : null}</label>)}{!visibleRepositories.length && <p className="small-text">{loadingRepos ? 'Looking through your GitHub…' : 'No repositories found. Try another search or add a repository or organization.'}</p>}</div>{!sample && <><form className="add-repository" onSubmit={e => void addRepository(e)}><input placeholder="Repository or organization" aria-label="Repository or organization" aria-describedby="repository-source-hint" value={repoUrl} onChange={e => setRepoUrl(e.target.value)} disabled={scanning || loadingRepos || addingRepo} /><button className="icon-button" aria-label={addingRepo ? 'Adding repositories' : 'Add repository or organization'} disabled={!repoUrl.trim() || scanning || loadingRepos || addingRepo}><Plus size={17} /></button></form><p className="source-hint" id="repository-source-hint">Paste a GitHub URL or an organization name.</p>{sourceNotice && <p className="source-notice" role="status">{sourceNotice}</p>}<label className="private-toggle"><input type="checkbox" checked={includePrivate} disabled={scanning || loadingRepos || addingRepo || installing} onChange={e => { setIncludePrivate(e.target.checked); if (e.target.checked) void loadRepositories(true); }} /><span>Include private repositories</span><LockKeyhole size={13} /></label>{includePrivate && <div className="private-info"><p>Choose personal or organization repositories on GitHub. Your organization may need to approve access.</p><button className="text-button" disabled={scanning || installing || loadingRepos || addingRepo} onClick={() => void installPrivate()}>{installing ? 'Opening GitHub…' : 'Choose private repositories on GitHub'}</button><button className="text-button" disabled={loadingRepos || scanning || addingRepo || installing} onClick={() => void loadRepositories(true)}>Refresh access</button></div>}<button className="button primary scan-button" aria-keyshortcuts="Meta+Enter Control+Enter" title="Analyze selected repositories (⌘/Ctrl + Enter)" disabled={scanning ? false : !selectedCount || loadingRepos || addingRepo || installing} onClick={() => scanning ? operations.current.cancel('scan') : void scan()}>{scanning ? <><Square size={14} />Cancel scan</> : <>Analyze<kbd>{modifierLabel} ↵</kbd></>}</button></>}</> : <p className="repos-placeholder">Connect GitHub to select repositories.</p>}</div>
-      <CommitFilterControl enabled={skipOversized} scope={filterScope} onEnabledChange={setSkipOversized} onScopeChange={setFilterScope} />
+      <section className="commit-filter-control" aria-label="File filter"><label className="commit-filter-toggle"><input type="checkbox" checked={excludeLockfiles} onChange={event => setExcludeLockfiles(event.target.checked)} /><span>Exclude lockfiles</span></label><p className="commit-filter-threshold">Both periods. File checks can make scans take longer.</p></section><CommitFilterControl enabled={skipOversized} onEnabledChange={setSkipOversized} />
     </aside><div className="result-area">{(error || callbackError) && <div className="error-banner" role="alert"><span>{error || callbackError}{connectionExpired && <> <a href="/api/auth/github/start" className="reconnect-link">Reconnect GitHub</a></>}</span><button className="icon-button" aria-label="Dismiss error" onClick={() => { setError(''); setCallbackError(''); window.history.replaceState({}, '', '/'); }}><X size={16} /></button></div>}{selectionChanged && <p className="selection-notice" role="status">Repository selection changed. Analyze again to update these results.</p>}{scanning && <div className="scan-progress" role="status" aria-live="polite"><span className="spinner" /><div><strong>{scanMessage}</strong><span>{progress.filter(r => r.status === 'complete').length} of {progress.length} repositories complete</span></div></div>}{preview || sample || progress.length > 0 ? <Result result={result} login={user?.login ?? ''} sample={sample || preview} share={shareResult} /> : <div className="empty-result"><h2>Select repositories to begin.</h2><p>Your code stays on GitHub.</p><kbd>{modifierLabel} ↵ to analyze</kbd></div>}{!scanning && scanMessage && <p className="scan-completion" role="status">{scanMessage}</p>}{progress.some(p => p.message) && <details className="coverage-details"><summary>Repository coverage details</summary>{progress.filter(p => p.message).map(p => <p key={p.repository.id}><strong>{p.repository.nameWithOwner}</strong>: {p.message}</p>)}</details>}<p className="result-disclaimer">Unequal time spans. Activity, not AI authorship or productivity. <a href="/about">Methodology</a></p></div></div>
   </main><Footer />{share && <ShareDialog result={share} close={() => setShare(null)} />}</div>;
 }

@@ -131,7 +131,9 @@ const escapeHtml = (value: string) => value.replace(/[&<>"']/g, character => ({ 
 function shareMeta(header: ShareHeader, url: string): string {
   const { result, imageTheme } = header;
   const number = (value: number) => value.toLocaleString('en-US');
-  const partial = result.coverage.incomplete > 0 || result.coverage.unavailable > 0;
+  const files = result.fileFilter;
+  const incompleteFiles = files?.enabled ? files.uninspectedBefore.commits + files.uninspectedAfter.commits : 0;
+  const partial = result.coverage.incomplete > 0 || result.coverage.unavailable > 0 || incompleteFiles > 0;
   const title = `${result.sample ? 'Sample: ' : ''}@${result.login}’s GitHub activity · AI Diff`;
   const description = [
     `${number(result.before.additions)} lines added before ${result.cutoff}; ${number(result.after.additions)} after.`,
@@ -139,6 +141,8 @@ function shareMeta(header: ShareHeader, url: string): string {
     ...(result.sample ? ['Fictional sample data.'] : ['Self-reported GitHub activity.']),
     ...(result.includesPrivate ? [result.sample ? 'Includes fictional private totals.' : 'Includes private totals.'] : []),
     ...(result.commitFilter?.enabled ? [`Size filter applied${result.commitFilter.scope === 'before' ? ' before only (unequal filter)' : ' to both periods'}.`] : []),
+    ...(files ? [`Dependency lockfiles/checksums ${files.enabled ? 'excluded from both periods' : 'included'}.`] : []),
+    ...(incompleteFiles > 0 ? [`File inspection incomplete: ${number(files!.uninspectedBefore.commits)} before and ${number(files!.uninspectedAfter.commits)} after commits omitted.`] : []),
   ].join(' ');
   const attributes = (kind: 'name' | 'property', name: string, content: string) => `<meta ${kind}="${name}" content="${escapeHtml(content)}">`;
   return `<title>${escapeHtml(title)}</title>` + [

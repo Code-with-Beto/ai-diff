@@ -50,10 +50,19 @@ export async function unseal<T>(env: CryptoEnvironment, purpose: string, value: 
   return JSON.parse(decoder.decode(plaintext)) as T;
 }
 
+export async function createSigner(env: CryptoEnvironment, purpose: string): Promise<(value: unknown) => Promise<string>> {
+  // Reuse only within the calling request. A history page may issue 100 scoped
+  // file handles; deriving the same purpose key for every commit wastes CPU.
+  const signingKey = await key(env, purpose, 'HMAC');
+  return async (value: unknown) => {
+    const payload = encode(encoder.encode(JSON.stringify(value)));
+    const signature = await crypto.subtle.sign('HMAC', signingKey, encoder.encode(payload));
+    return `${payload}.${encode(new Uint8Array(signature))}`;
+  };
+}
+
 export async function sign<T>(env: CryptoEnvironment, purpose: string, value: T): Promise<string> {
-  const payload = encode(encoder.encode(JSON.stringify(value)));
-  const signature = await crypto.subtle.sign('HMAC', await key(env, purpose, 'HMAC'), encoder.encode(payload));
-  return `${payload}.${encode(new Uint8Array(signature))}`;
+  return (await createSigner(env, purpose))(value);
 }
 
 export async function verify<T>(env: CryptoEnvironment, purpose: string, token: string): Promise<T> {

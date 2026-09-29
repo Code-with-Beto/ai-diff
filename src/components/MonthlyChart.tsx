@@ -1,16 +1,18 @@
 import { useId, useState } from 'react';
-import type { KeyboardEvent, PointerEvent } from 'react';
-import type { MonthTotal } from '../../shared/types';
+import type { KeyboardEvent, MouseEvent, PointerEvent } from 'react';
+import type { AnalyzedCommit, MonthTotal } from '../../shared/types';
 import { formatDate, formatNumber } from '../lib/analysis';
+import MonthlyBreakdown from './MonthlyBreakdown';
 import './MonthlyChart.css';
 
 const monthFormatter = new Intl.DateTimeFormat('en-US', { month: 'short', year: 'numeric', timeZone: 'UTC' });
 const axisFormatter = new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 });
 const monthLabel = (month: string) => monthFormatter.format(new Date(`${month}-01T00:00:00Z`));
 
-export default function MonthlyChart({ months, cutoff }: { months: MonthTotal[]; cutoff: string }) {
+export default function MonthlyChart({ months, cutoff, details, excludeLockfiles = true }: { months: MonthTotal[]; cutoff: string; details?: AnalyzedCommit[]; excludeLockfiles?: boolean }) {
   const id = useId();
   const [selectedMonth, setSelectedMonth] = useState<string | null>(null);
+  const [inspectedMonth, setInspectedMonth] = useState<string | null>(null);
   const peakIndex = months.reduce((peak, month, index) => month.before + month.after > months[peak].before + months[peak].after ? index : peak, 0);
   const selectedIndex = months.findIndex(month => month.month === selectedMonth);
   const activeIndex = selectedIndex < 0 ? peakIndex : selectedIndex;
@@ -29,6 +31,11 @@ export default function MonthlyChart({ months, cutoff }: { months: MonthTotal[];
   const cutoffPosition = cutoffMonth < 0 ? null : (cutoffMonth + (cutoffDate.getUTCDate() - 1) / daysInMonth) / months.length;
 
   function exploreWithKeyboard(event: KeyboardEvent<HTMLDivElement>) {
+    if (details && activeMonth && (event.key === 'Enter' || event.key === ' ')) {
+      event.preventDefault();
+      setInspectedMonth(activeMonth.month);
+      return;
+    }
     const nextIndex = {
       ArrowLeft: activeIndex - 1, ArrowDown: activeIndex - 1,
       ArrowRight: activeIndex + 1, ArrowUp: activeIndex + 1,
@@ -46,12 +53,22 @@ export default function MonthlyChart({ months, cutoff }: { months: MonthTotal[];
     setSelectedMonth(months[Math.max(0, Math.min(months.length - 1, index))].month);
   }
 
+  function inspectWithPointer(event: MouseEvent<HTMLDivElement>) {
+    if (!details || !activeMonth) return;
+    event.currentTarget.focus({ preventScroll: true });
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const index = event.detail === 0 ? activeIndex : Math.max(0, Math.min(months.length - 1, Math.floor((event.clientX - bounds.left) / bounds.width * months.length)));
+    setSelectedMonth(months[index].month);
+    setInspectedMonth(months[index].month);
+  }
+
   return <section className="monthly-chart" aria-labelledby={`${id}-heading`}>
     <div className="monthly-chart__header">
       <h3 id={`${id}-heading`}>Lines added per month</h3>
-      {activeMonth && <div className="monthly-chart__readout" aria-hidden="true">
-        <span className="monthly-chart__month">{monthLabel(activeMonth.month)}</span>
-        <strong>{formatNumber(activeMonth.before + activeMonth.after)}</strong>
+      {activeMonth && <div className="monthly-chart__readout">
+        <span className="monthly-chart__month" aria-hidden="true">{monthLabel(activeMonth.month)}</span>
+        <strong aria-hidden="true">{formatNumber(activeMonth.before + activeMonth.after)}</strong>
+        {details && <button type="button" className="monthly-chart__inspect" onClick={() => setInspectedMonth(activeMonth.month)} aria-haspopup="dialog" aria-label={`Details for ${monthLabel(activeMonth.month)}`}>Details</button>}
       </div>}
     </div>
 
@@ -64,11 +81,12 @@ export default function MonthlyChart({ months, cutoff }: { months: MonthTotal[];
       <div className="monthly-chart__graph">
         <div className="monthly-chart__axis" aria-hidden="true"><span>{peak ? axisFormatter.format(peak) : ''}</span><span>{peak ? axisFormatter.format(peak / 2) : ''}</span><span>0</span></div>
         <div
-          className="monthly-chart__plot"
+          className={`monthly-chart__plot${details ? ' monthly-chart__plot--interactive' : ''}`}
           role="slider"
           tabIndex={0}
           aria-label="Explore monthly lines added"
           aria-orientation="horizontal"
+          aria-haspopup={details ? 'dialog' : undefined}
           aria-valuemin={1}
           aria-valuemax={months.length}
           aria-valuenow={activeIndex + 1}
@@ -77,6 +95,7 @@ export default function MonthlyChart({ months, cutoff }: { months: MonthTotal[];
           onKeyDown={exploreWithKeyboard}
           onPointerMove={exploreWithPointer}
           onPointerDown={exploreWithPointer}
+          onClick={inspectWithPointer}
         >
           <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" aria-hidden="true">
             <defs><pattern id={`${id}-before`} width="8" height="8" patternUnits="userSpaceOnUse"><rect width="8" height="8" className="monthly-chart__bar--before" /><path d="M-2 2 2-2 M0 8 8 0 M6 10 10 6" className="monthly-chart__pattern" /></pattern></defs>
@@ -100,7 +119,7 @@ export default function MonthlyChart({ months, cutoff }: { months: MonthTotal[];
           {timeline.map(index => <span key={months[index].month} style={{ left: `${months.length > 1 ? index / (months.length - 1) * 100 : 0}%` }}>{monthLabel(months[index].month)}</span>)}
         </div>
       </div>
-      <span className="monthly-chart__sr-only" id={`${id}-instructions`}>Hover or tap a month to explore. Use arrow keys when focused. Use Home or End for the first or last month, and Page Up or Page Down to move twelve months.</span>
+      <span className="monthly-chart__sr-only" id={`${id}-instructions`}>Hover or tap a month to explore. Use arrow keys when focused. Use Home or End for the first or last month, and Page Up or Page Down to move twelve months.{details && ' Click a month or press Enter or Space to view its repositories, commits, and changed files.'}</span>
       <span className="monthly-chart__sr-only" id={`${id}-cutoff`}>Before means before {formatDate(cutoff)}. After includes that date. The comparison starts at midnight UTC.</span>
       <details className="monthly-chart__details">
         <summary>Monthly values</summary>
@@ -108,10 +127,11 @@ export default function MonthlyChart({ months, cutoff }: { months: MonthTotal[];
           <table>
             <caption>Lines added before and after {formatDate(cutoff)} (UTC)</caption>
             <thead><tr><th scope="col">Month</th><th scope="col">Before</th><th scope="col">After</th></tr></thead>
-            <tbody>{months.map(month => <tr key={month.month}><th scope="row">{monthLabel(month.month)}</th><td>{formatNumber(month.before)}</td><td>{formatNumber(month.after)}</td></tr>)}</tbody>
+            <tbody>{months.map(month => <tr key={month.month}><th scope="row">{details ? <button type="button" className="monthly-chart__month-button" onClick={() => { setSelectedMonth(month.month); setInspectedMonth(month.month); }} aria-haspopup="dialog" aria-label={`Details for ${monthLabel(month.month)}`}>{monthLabel(month.month)}</button> : monthLabel(month.month)}</th><td>{formatNumber(month.before)}</td><td>{formatNumber(month.after)}</td></tr>)}</tbody>
           </table>
         </div>
       </details>
     </> : <p className="monthly-chart__empty">No monthly activity to show.</p>}
+    {details && inspectedMonth && <MonthlyBreakdown month={inspectedMonth} details={details} excludeLockfiles={excludeLockfiles} close={() => setInspectedMonth(null)} />}
   </section>;
 }

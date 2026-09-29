@@ -180,3 +180,5 @@
     gap: 8px;
   }
 }
+
+.file-filter-note { margin: 1rem 0; color: var(--muted); font-size: .8125rem; line-height: 1.6; }
