@@ -10,7 +10,9 @@ export function encode(value: Uint8Array): string {
 export function decode(value: string): Uint8Array<ArrayBuffer> {
   if (!/^[A-Za-z0-9_\-+/]*={0,2}$/.test(value)) throw new Error('Invalid encoding');
   const binary = atob(value.replace(/-/g, '+').replace(/_/g, '/'));
-  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
+  return bytes;
 }
 
 export function randomString(bytes = 32): string {
@@ -65,13 +67,22 @@ export async function sign<T>(env: CryptoEnvironment, purpose: string, value: T)
   return (await createSigner(env, purpose))(value);
 }
 
+export async function createVerifier(env: CryptoEnvironment, purpose: string): Promise<<T>(token: string) => Promise<T>> {
+  // Keep this closure local to a request, like createSigner. Every capability
+  // still gets its own HMAC check without repeating HKDF for each batch item.
+  const verificationKey = await key(env, purpose, 'HMAC');
+  return async <T>(token: string): Promise<T> => {
+    if (token.length > 6000) throw new Error('Invalid envelope');
+    const parts = token.split('.');
+    if (parts.length !== 2 || !await crypto.subtle.verify('HMAC', verificationKey, decode(parts[1]), encoder.encode(parts[0]))) {
+      throw new Error('Invalid envelope');
+    }
+    return JSON.parse(decoder.decode(decode(parts[0]))) as T;
+  };
+}
+
 export async function verify<T>(env: CryptoEnvironment, purpose: string, token: string): Promise<T> {
-  if (token.length > 6000) throw new Error('Invalid envelope');
-  const parts = token.split('.');
-  if (parts.length !== 2 || !await crypto.subtle.verify('HMAC', await key(env, purpose, 'HMAC'), decode(parts[1]), encoder.encode(parts[0]))) {
-    throw new Error('Invalid envelope');
-  }
-  return JSON.parse(decoder.decode(decode(parts[0]))) as T;
+  return (await createVerifier(env, purpose))<T>(token);
 }
 
 export async function challenge(verifier: string): Promise<string> {

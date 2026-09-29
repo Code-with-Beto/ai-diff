@@ -1,6 +1,6 @@
 import type { CommitFile, CommitRecord, FileScanBatch, FileScanPage } from '../shared/types';
 import { ApiError, FILE_REPOSITORY_QUERY, github } from './github';
-import { createSigner, sign, verify, type CryptoEnvironment } from './security';
+import { createSigner, createVerifier, sign, verify, type CryptoEnvironment } from './security';
 
 export const FILE_RESPONSE_LIMIT = 2 * 1024 * 1024;
 export const FILE_BATCH_RESPONSE_LIMIT = 384 * 1024;
@@ -48,10 +48,10 @@ export async function addFileHandles(
   }));
 }
 
-async function readHandle(env: CryptoEnvironment, session: FileSession, input: Record<string, unknown>): Promise<FileHandle> {
+async function readHandle(env: CryptoEnvironment, session: FileSession, input: Record<string, unknown>, verifyHandle?: (token: string) => Promise<FileHandle>): Promise<FileHandle> {
   try {
     if (Object.keys(input).length !== 1 || typeof input.handle !== 'string' || !input.handle || input.handle.length > 6000) throw new Error();
-    const handle = await verify<FileHandle>(env, PURPOSE, input.handle);
+    const handle = verifyHandle ? await verifyHandle(input.handle) : await verify<FileHandle>(env, PURPOSE, input.handle);
     if (handle.version !== 1 || handle.purpose !== PURPOSE || handle.sessionId !== session.sessionId || handle.githubUserId !== session.user.id ||
       !integer(handle.expiresAt) || handle.expiresAt <= Date.now() / 1000 || handle.expiresAt > session.expiresAt ||
       !identifier(handle.repositoryNodeId) || typeof handle.isPrivate !== 'boolean' || !sha(handle.oid) ||
@@ -124,7 +124,7 @@ async function readRepository(session: FileSession, handles: FileHandle[]): Prom
   return repository;
 }
 
-async function readFilePage(env: CryptoEnvironment, session: FileSession, handle: FileHandle, repository: LiveRepository, maximum: number): Promise<FileScanPage> {
+async function readFilePage(env: CryptoEnvironment, session: FileSession, handle: FileHandle, repository: LiveRepository, maximum: number, signNext?: (value: FileHandle) => Promise<string>): Promise<FileScanPage> {
   // File counts are required to detect truncation, including omitted zero-line binary changes.
   if (handle.changedFiles === null || handle.changedFiles > MAX_FILES) throw unavailable();
   const name = repository.nameWithOwner.split('/');
@@ -166,7 +166,7 @@ async function readFilePage(env: CryptoEnvironment, session: FileSession, handle
   const remaining = Number(remainingHeader);
   const reset = Number(resetHeader);
   if (!remainingHeader || !resetHeader || !integer(remaining) || !integer(reset) || reset < 1 || !Number.isFinite(new Date(reset * 1000).getTime())) throw unavailable();
-  const nextHandle = next === null ? null : await sign(env, PURPOSE, {
+  const nextHandle = next === null ? null : await (signNext ?? (value => sign(env, PURPOSE, value)))({
     ...handle, page: next, fileCount: count, readAdditions: additions, readDeletions: deletions,
   } satisfies FileHandle);
   return { oid: handle.oid, files, nextHandle, complete: next === null, remaining, resetAt: new Date(reset * 1000).toISOString() };
@@ -187,15 +187,18 @@ export async function scanCommitFilesBatch(
   }
   // Verify the entire request before reading any repository or commit. A SHA
   // appears only once in a batch, including when handles refer to different pages.
-  const handles = await Promise.all(input.handles.map(handle => readHandle(env, session, { handle })));
+  const verifier = await createVerifier(env, PURPOSE);
+  const handles = await Promise.all(input.handles.map(handle => readHandle(env, session, { handle }, verifier<FileHandle>)));
   if (new Set(handles.map(handle => handle.oid)).size !== handles.length || handles.some(handle => handle.repositoryNodeId !== handles[0].repositoryNodeId)) {
     throw new ApiError(400, 'invalid_file_scan', 'Use distinct commits from the same repository in each file batch.');
   }
   await charge?.(handles.length);
   const repository = await readRepository(session, handles);
+  let signer: Promise<(value: unknown) => Promise<string>> | undefined;
+  const signNext = async (value: FileHandle) => (await (signer ??= createSigner(env, PURPOSE)))(value);
   // Four bounded bodies use at most 1.5 MiB of JSON parsing per invocation.
   // A heavy page is retried by itself with the existing 2 MiB limit.
-  const pages = await Promise.allSettled(handles.map(handle => readFilePage(env, session, handle, repository, FILE_BATCH_RESPONSE_LIMIT)));
+  const pages = await Promise.allSettled(handles.map(handle => readFilePage(env, session, handle, repository, FILE_BATCH_RESPONSE_LIMIT, signNext)));
   for (const page of pages) {
     if (page.status === 'rejected' && page.reason instanceof ApiError && ['authentication_required', 'session_expired', 'repository_unavailable', 'repository_visibility_changed', 'forks_excluded'].includes(page.reason.code)) throw page.reason;
   }
