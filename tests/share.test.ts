@@ -188,8 +188,8 @@ describe('share image comparison', () => {
     const { labels } = await recordImage({ ...fixture, sample: true });
     const values = labels.map(label => label.value);
     expect(values.filter(value => value === 'Lines added')).toHaveLength(1);
-    expect(values).toContain('Before');
-    expect(values).toContain('After');
+    expect(values).toContain('Before AI');
+    expect(values).toContain('After AI');
     expect(values).toContain('Jan 1, 2019 – Sep 28, 2025');
     expect(values).toContain('Sep 29, 2025 – Sep 29, 2026');
     expect(values.join(' ')).toContain('Partial · 3/6 repos complete');

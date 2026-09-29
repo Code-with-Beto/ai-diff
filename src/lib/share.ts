@@ -220,7 +220,7 @@ export async function renderShareImage(result: ShareResult): Promise<Blob> {
     // Matching column widths and one bar scale keep the comparison symmetric.
     const x = 56 + index * 584;
     const additions = result[period].additions;
-    text(period === 'before' ? 'Before' : 'After', x, 185, 24, colors.muted, 500, barWidth);
+    text(period === 'before' ? 'Before AI' : 'After AI', x, 185, 24, colors.muted, 500, barWidth);
     text(formatNumber(additions), x, 308, numberSize, colors.text, 750, barWidth, 28);
     const range = period === 'before'
       ? result.before.commits > 0 && result.firstCommitAt
