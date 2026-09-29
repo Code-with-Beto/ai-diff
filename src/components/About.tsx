@@ -28,7 +28,8 @@ export default function About() {
         <section id="coverage" aria-labelledby="coverage-heading">
           <h2 id="coverage-heading">Coverage and limitations</h2>
           <p>Results cover <strong>selected GitHub repository history</strong>, not your entire career. Deleted or inaccessible repositories, work outside the default branch, uncommitted work, and old author identities that GitHub cannot connect to your account can be missing. Co-author credits do not count as primary authorship.</p>
-          <p>Discovery includes your owned public repositories and repositories GitHub lists as recently contributed to. You can also add a public repository by URL. Archived repositories are included. Forks are excluded from discovery, manual additions, and analysis. Organization policies may limit private access even after installation.</p>
+          <p>Automatic discovery includes your owned public repositories and repositories GitHub lists as recently contributed to. It does not include every organization you have worked in. Enter an organization’s GitHub handle or URL to load its public repositories, or add a public repository by URL. Archived repositories are included. Forks are excluded from discovery, manual additions, and analysis.</p>
+          <p>Private organization repositories require a GitHub App installation with access to the repositories you choose. You also need access through your own GitHub account. Organization owners may need to approve installation, and organization policies or SSO requirements can limit access.</p>
           <p>Every result shows completed, unavailable, and incomplete repositories. A cancelled or interrupted scan is a partial result. Large histories can take longer, and GitHub’s API limits may temporarily pause a scan.</p>
         </section>
 
@@ -50,7 +51,7 @@ export default function About() {
           <h2 id="sharing-heading">Sharing</h2>
           <p>Images are generated in your browser. You can preview, copy, or download one without uploading it. If private repositories contributed, their counts are included in the aggregate totals, but their names are left out.</p>
           <p>A result link contains only the displayed aggregate summary in its URL fragment, the part after <code>#</code>. That fragment is not sent to our server. Anyone with the full link can view and reshare those totals, including private contributions. Keep the link private if you want the totals to stay private.</p>
-          <p>Shared summaries are editable and unverified. They are a snapshot, not proof of GitHub activity. Social link previews describe AI Diff; opening the full link displays the result.</p>
+          <p>A result link preserves the numbers you chose to share. Opening it does not fetch GitHub again, and its contents can be edited. AI Diff does not independently verify shared summaries. Social link previews describe AI Diff; opening the full link displays the result.</p>
         </section>
       </article>
 

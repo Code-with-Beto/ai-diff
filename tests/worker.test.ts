@@ -246,6 +246,93 @@ describe('repository pagination', () => {
   });
 });
 
+describe('public organization discovery', () => {
+  const endpoint = (organization: string, cursor?: string) => `/api/github/repositories?${new URLSearchParams({ kind: 'organization', organization, ...(cursor ? { cursor } : {}) })}`;
+  const organizationResponse = (nodes: unknown[], hasNextPage = false, endCursor: string | null = null) => apiResponse({ data: { organization: { repositories: { nodes, pageInfo: { hasNextPage, endCursor } } } } });
+
+  it.each(['Code-with-Beto', ' Code-with-Beto ', 'github.com/Code-with-Beto', 'https://github.com/Code-with-Beto/', 'https://github.com/orgs/Code-with-Beto', 'https://github.com/orgs/Code-with-Beto/repositories/'])('accepts the organization form %s using only the fixed public query', async (input) => {
+    const orgRepository = { ...repository, nameWithOwner: 'Code-with-Beto/project', isArchived: true };
+    githubFetch.mockResolvedValueOnce(organizationResponse([orgRepository]));
+    const response = await worker.fetch(authenticated(endpoint(input)), env);
+    expect(await response.json()).toEqual({ repositories: [orgRepository], hasNextPage: false, cursor: null });
+    expect(githubFetch.mock.calls[0][0]).toBe('https://api.github.com/graphql');
+    const query = JSON.parse(String(githubFetch.mock.calls[0][1]?.body));
+    expect(query.variables).toEqual({ login: 'Code-with-Beto', after: null });
+    expect(query.query).toContain('organization(login: $login)');
+    expect(query.query).toContain('privacy: PUBLIC');
+    expect(query.query).toContain('isFork: false');
+    expect(query.query).toContain('first: 100');
+    expect(query.query).not.toMatch(/repositoriesContributedTo|members|isArchived:/);
+  });
+
+  it.each(['', '-invalid', 'x'.repeat(40), 'https://github.com.evil.example/Code-with-Beto', 'https://user@github.com/Code-with-Beto', 'http://github.com/Code-with-Beto', 'https://github.com:443/Code-with-Beto', 'https://github.com/Code-with-Beto/ai-diff', 'https://github.com/Code-with-Beto?tab=repositories', 'https://github.com/Code-with-Beto#fragment', 'Code-with-Beto\" }) { viewer { login } }'])('rejects invalid organization input %s before calling GitHub', async (input) => {
+    const response = await worker.fetch(authenticated(endpoint(input)), env);
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ error: { code: 'invalid_organization' } });
+    expect(githubFetch).not.toHaveBeenCalled();
+  });
+
+  it('continues past a filtered page and includes older archived public repositories on the next page', async () => {
+    githubFetch.mockResolvedValueOnce(organizationResponse([{ ...repository, isFork: true }, { ...repository, id: 'private', isPrivate: true }], true, 'org-next'));
+    const first = await worker.fetch(authenticated(endpoint('Code-with-Beto')), env);
+    expect(await first.json()).toEqual({ repositories: [], hasNextPage: true, cursor: 'org-next' });
+    const older = { ...repository, id: 'old-org-project', nameWithOwner: 'Code-with-Beto/old-project', isArchived: true };
+    githubFetch.mockResolvedValueOnce(organizationResponse([older]));
+    const second = await worker.fetch(authenticated(endpoint('Code-with-Beto', 'org-next')), env);
+    expect(await second.json()).toEqual({ repositories: [older], hasNextPage: false, cursor: null });
+    expect(JSON.parse(String(githubFetch.mock.calls[1][1]?.body)).variables).toEqual({ login: 'Code-with-Beto', after: 'org-next' });
+  });
+
+  it.each([
+    { data: { organization: null } },
+    { errors: [{ type: 'NOT_FOUND', message: 'Organization lookup failed.' }], data: { organization: null } },
+  ])('reports an unavailable organization instead of a successful empty list', async (body) => {
+    githubFetch.mockResolvedValueOnce(apiResponse(body));
+    const response = await worker.fetch(authenticated(endpoint('missing-organization')), env);
+    expect(response.status).toBe(404);
+    expect(await response.json()).toMatchObject({ error: { code: 'organization_unavailable' } });
+  });
+
+  it('keeps a genuinely empty organization successful', async () => {
+    githubFetch.mockResolvedValueOnce(organizationResponse([]));
+    const response = await worker.fetch(authenticated(endpoint('empty-organization')), env);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ repositories: [], hasNextPage: false, cursor: null });
+  });
+
+  it.each(['isFork', 'isPrivate'])('fails closed on unknown organization repository %s', async (field) => {
+    githubFetch.mockResolvedValueOnce(organizationResponse([{ ...repository, [field]: undefined }]));
+    const response = await worker.fetch(authenticated(endpoint('Code-with-Beto')), env);
+    expect(response.status).toBe(502);
+    expect(await response.json()).toMatchObject({ error: { code: 'github_incomplete' } });
+  });
+
+  it('rejects a repeated organization cursor rather than making the client loop', async () => {
+    githubFetch.mockResolvedValueOnce(organizationResponse([repository], true, 'same-cursor'));
+    const response = await worker.fetch(authenticated(endpoint('Code-with-Beto', 'same-cursor')), env);
+    expect(response.status).toBe(502);
+    expect(await response.json()).toMatchObject({ error: { code: 'github_incomplete' } });
+  });
+
+  it('requires the existing session and enforces its rate limiter', async () => {
+    expect((await worker.fetch(request(endpoint('Code-with-Beto')), env)).status).toBe(401);
+    const limit = vi.fn().mockResolvedValue({ success: false });
+    const response = await worker.fetch(authenticated(endpoint('Code-with-Beto')), { ...env, API_LIMITER: { limit } });
+    expect(response.status).toBe(429);
+    expect(await response.json()).toMatchObject({ error: { code: 'rate_limited', retryAfter: 60 } });
+    expect(limit).toHaveBeenCalledWith({ key: `user:${viewer.id}` });
+    expect(githubFetch).not.toHaveBeenCalled();
+  });
+
+  it('preserves GitHub rate-limit responses without disguising them as missing organizations', async () => {
+    githubFetch.mockResolvedValueOnce(apiResponse({}, 429, { 'retry-after': '90' }));
+    const response = await worker.fetch(authenticated(endpoint('Code-with-Beto')), env);
+    expect(response.status).toBe(429);
+    expect(response.headers.get('retry-after')).toBe('90');
+    expect(await response.json()).toMatchObject({ error: { code: 'rate_limited', retryAfter: 90 } });
+  });
+});
+
 describe('fork policy at direct API boundaries', () => {
   it.each([false, true])('rejects a manually added fork even with valid repository access (private=%s)', async (isPrivate) => {
     githubFetch.mockResolvedValueOnce(apiResponse({ data: { repository: { ...repository, isFork: true, isPrivate } } }));

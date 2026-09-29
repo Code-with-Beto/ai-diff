@@ -1,8 +1,16 @@
-# GitHub backend
+# Setup and technical notes
 
 The Worker uses GitHub App **user access tokens**. The sign-in flow is designed to read public resources without requiring installation. Private repositories are opt-in: users install the app on selected repositories, then choose repositories to scan. Permissions are **Contents: read** and **Metadata: read** only. No installation token, app private key, or repository clone is used at runtime.
 
 ## Configuration
+
+Sample mode runs without credentials. To connect GitHub locally, register your own development GitHub App and copy the example configuration:
+
+```sh
+cp .dev.vars.example .dev.vars
+```
+
+Set `APP_ORIGIN`, `GITHUB_APP_SLUG`, `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, and `SESSION_SECRET` in `.dev.vars`. Generate a unique session secret with `openssl rand -base64 32`. Keep this file private and ignored by Git. Never put secrets in `VITE_*` variables, source files, or committed configuration.
 
 Set `APP_ORIGIN` to the exact deployment origin without a trailing slash. Configure `GITHUB_APP_SLUG` and `GITHUB_CLIENT_ID`. Store `GITHUB_CLIENT_SECRET` and `SESSION_SECRET` using Cloudflare secrets, never in source. `SESSION_SECRET` must be a base64-encoded 32-byte random value. Keep `.dev.vars` ignored for local configuration. Local `APP_ORIGIN` may use `http://localhost:PORT` or `http://127.0.0.1:PORT`; production requires HTTPS.
 
@@ -30,6 +38,7 @@ All API responses use `Cache-Control: no-store`. All authenticated POST routes r
 | `GET /api/github/setup` | Validates installation-return state and redirects to `/?private=connected`. Installation IDs in the callback do not authorize access. |
 | `GET /api/github/installations?page=1` | Returns `{installations:[{id,login}],nextPage}` from the user-access-token API. |
 | `GET /api/github/repositories?kind=owned\|contributed&cursor=...` | Public owned repositories or GitHub's recent contributed repositories; returns `RepositoryPage`. |
+| `GET /api/github/repositories?kind=organization&organization=...&cursor=...` | Public, non-fork repositories belonging to a supplied organization login or `https://github.com/org` URL. Returns `RepositoryPage` with up to 100 repositories and an opaque next cursor. Requires no additional GitHub App permissions. |
 | `GET /api/github/repositories?kind=installation&installationId=...&cursor=...` | Repositories accessible to both the installation and the signed-in user; cursor is the REST page number. |
 | `POST /api/github/repository` | `{url}` → `{repository}`; only public `https://github.com/owner/repo` URLs. |
 | `POST /api/scan/start` | `{repositoryId,includePrivate,asOf}` → `ScanStart`. Takes a snapshot of the default HEAD. |
@@ -43,11 +52,57 @@ The Worker imports the response contracts from `shared/types.ts`. `asOf` is an I
 
 ## Measurement and failure handling
 
-The backend requests commit metadata, aggregate additions/deletions, primary author identity, and parent counts. It never requests file contents, patches, commit messages, or author emails. The client excludes merge commits and duplicate SHAs and partitions by committed date. GitHub's aggregate line counts include non-code files and generated changes. They do not identify AI-written code or represent unique lines remaining in the codebase.
+The backend requests commit metadata, aggregate additions/deletions, primary author identity, and parent counts. It never requests file contents, patches, commit messages, or author emails. A commit counts only when GitHub associates its primary author with the connected account. The client excludes merge commits and duplicate SHAs and partitions by committed date at midnight UTC. Forks are excluded from discovery, manual additions, and scans.
 
-`repositoriesContributedTo` is recent discovery, not a complete career archive. The public manual-add route can supplement it. Inaccessible, deleted, non-default-branch, unpushed, or unmatched-author history cannot be counted. Never interpret an unavailable or incomplete repository as zero. A partial GraphQL response causes an error; retry the same signed page rather than advancing the cursor. Rate-limit responses include retry guidance. Repository enumeration is paginated without an artificial career-history cap.
+GitHub's aggregate line counts include documentation, lockfiles, generated files, imports, and repeated edits. An imported project or template can inflate totals even when the primary author matches. A root commit can add an existing codebase in one step. These counts do not identify AI-written code, original line authorship, or unique lines remaining in the codebase.
+
+The calculation skips commits with more than 100,000 added and deleted lines combined by default, applying the same rule to both periods. A small disclosure shows excluded totals and the largest commits. Users can disable the filter or choose a before-only scope, which stays labeled as an unequal filter. Changes recalculate in browser memory. This is a whole-commit size heuristic, not file-level dependency detection: legitimate large commits may be excluded and smaller generated changes may remain. Share images, text, and links preserve the filter and exclusion count.
+
+Automatic discovery combines owned public repositories and GitHub's recently contributed repositories. `repositoriesContributedTo` is not a complete career archive or a list of every organization the user has worked in. The unified repository-or-organization input can load an organization's public repositories by login or URL, or add a public repository by URL. Organization enumeration includes only public non-forks; private organization repositories require an installation granted access to the selected repositories, the user's own GitHub access, and any required organization approval or SSO authorization.
+
+Inaccessible, deleted, non-default-branch, unpushed, or unmatched-author history cannot be counted. Never interpret an unavailable or incomplete repository as zero. A partial GraphQL response causes an error; retry the same signed page rather than advancing the cursor. Rate-limit responses include retry guidance. Repository enumeration is paginated without an artificial career-history cap.
 
 There is no database, persistent server scan job, general GitHub proxy, or token exposed to browser JavaScript. The browser owns scan progress and aggregated results. The Worker checks current repository visibility on every scan page and stops if a public snapshot becomes private, requiring explicit private selection and a new scan. Stateless handles are not a global traffic rate limiter; the production bindings add Cloudflare rate limits. Recheck production cookies, OAuth, selected private-repository access, and Worker CPU after changes to these boundaries.
+
+## Privacy and sharing
+
+GitHub's Contents permission technically permits reading source code. AI Diff requests commit metadata and line counts, not source files or patches. Tokens remain encrypted in expiring HttpOnly session cookies and are never exposed to browser JavaScript. Refresh tokens are discarded. Logout attempts revocation and clears local session state even when revocation fails.
+
+Analysis stays in browser memory, so reloading starts a new scan. Only the light/dark preference is saved in local browser storage. There are no third-party tracking scripts or stored server-side reports. GitHub and the hosting provider still process requests as part of operating their services.
+
+Share images are generated locally. Result links contain an aggregate summary in the URL fragment, after `#`, which is not sent to the server. Private repository names and raw commits are omitted. Sharing totals that include private contributions requires explicit acknowledgment.
+
+A result link preserves the numbers chosen at the time of sharing; opening it does not fetch GitHub again. Anyone with the full link can read, edit, or reshare the summary. AI Diff does not independently verify those shared numbers. Social previews describe the app; opening the full link displays the result.
+
+## Development reference
+
+| Command | Purpose |
+| --- | --- |
+| `npm run dev` | Start the local app and Worker |
+| `npm run build` | Type-check and build the client and Worker |
+| `npm run preview` | Preview the production build locally |
+| `npm run typecheck` | Run TypeScript checks |
+| `npm test` | Run the automated suite |
+| `npm run test:git` | Compare the calculation against controlled local Git history |
+| `npm run build:deploy` | Build using the ignored deployment configuration |
+| `npm run check:deploy` | Build and validate deployment without publishing |
+| `npm run deploy` | Build and publish the configured Worker |
+
+The React + TypeScript + Vite client owns scan progress, in-memory aggregation, charts, and image generation. The same-origin Cloudflare Worker owns authentication, encrypted sessions, request validation, and bounded GitHub GraphQL/REST reads. There are no repository clones, background jobs, AI inference calls, or persistent result storage.
+
+### Keyboard shortcuts
+
+| Shortcut | Action |
+| --- | --- |
+| `?` | Show shortcuts |
+| `T` | Toggle light/dark mode |
+| `/` | Focus repository search |
+| `⌘/Ctrl + Enter` | Analyze selected repositories |
+| `⌘/Ctrl + Shift + S` | Open sharing |
+| `⌘/Ctrl + Shift + C` | Copy the image while sharing |
+| `Esc` | Close a dialog |
+
+The app follows the system theme until the user selects a preference. Single-key shortcuts are inactive while typing and can be disabled for the current page session in Keyboard shortcuts. Modifier shortcuts remain enabled; analysis and sharing shortcuts apply only when those actions are available.
 
 ## Sources and verification
 

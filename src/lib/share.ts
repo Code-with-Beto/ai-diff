@@ -169,13 +169,13 @@ export async function renderShareImage(result: ShareResult): Promise<Blob> {
   await document.fonts?.ready;
   const canvas = document.createElement('canvas');
   canvas.width = 1200;
-  canvas.height = 630;
+  canvas.height = 600;
   const context = canvas.getContext('2d');
   if (!context) throw new Error('Image export is unavailable in this browser.');
   const c = context;
-  const colors = { background: '#0a0a0a', text: '#f5f5f5', before: '#bdbdbd', after: '#38bdf8', muted: '#a3a3a3', track: '#242424', quiet: '#969696' };
+  const colors = { background: '#0a0a0a', text: '#f5f5f5', before: '#bdbdbd', after: '#38bdf8', muted: '#a3a3a3', track: '#242424' };
   c.fillStyle = colors.background;
-  c.fillRect(0, 0, 1200, 630);
+  c.fillRect(0, 0, 1200, 600);
 
   const font = (size: number, weight: number) => `${weight} ${size}px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif`;
   const text = (value: string, x: number, y: number, size: number, color: string, weight = 400, maxWidth = 1088, minimumSize = 14) => {
@@ -187,7 +187,7 @@ export async function renderShareImage(result: ShareResult): Promise<Blob> {
     }
     c.fillText(value, x, y);
   };
-  const wrappedText = (value: string, y: number) => {
+  const wrappedContext = (value: string) => {
     const words = value.split(' ');
     const lines: string[] = [];
     let line = '';
@@ -200,53 +200,59 @@ export async function renderShareImage(result: ShareResult): Promise<Blob> {
       } else line = next;
     }
     if (line) lines.push(line);
-    lines.forEach((value, index) => text(value, 56, y + index * 20, 16, colors.muted));
-    return y + lines.length * 20;
+    lines.forEach((value, index) => text(value, 56, 466 + index * 22, 16, colors.muted));
   };
 
-  text(`AI Diff  /  @${result.login}${result.sample ? '  /  sample data' : ''}`, 56, 54, 19, colors.muted, 500);
-  text('Lines added', 56, 119, 34, colors.text, 500);
+  text(`@${result.login}${result.sample ? ' · Sample data' : ''}`, 56, 64, 22, colors.muted, 500, 800);
+  text('Lines added', 960, 64, 22, colors.muted, 500, 184);
 
   const cutoffTime = Date.parse(`${result.cutoff}T00:00:00.000Z`);
   const beforeEnd = new Date(Math.min(cutoffTime - 1, Date.parse(result.asOf))).toISOString();
   const maximum = Math.max(result.before.additions, result.after.additions);
   const barWidth = 504;
+  let numberSize = 108;
+  c.font = font(numberSize, 750);
+  while (Math.max(...[result.before.additions, result.after.additions].map(value => c.measureText(formatNumber(value)).width)) > barWidth && numberSize > 28) {
+    numberSize -= 1;
+    c.font = font(numberSize, 750);
+  }
   for (const [index, period] of (['before', 'after'] as const).entries()) {
+    // Matching column widths and one bar scale keep the comparison symmetric.
     const x = 56 + index * 584;
     const additions = result[period].additions;
-    const color = period === 'after' ? colors.after : colors.before;
-    text(period === 'before' ? 'Before' : 'After', x, 164, 18, color, 500, barWidth);
-    text(formatNumber(additions), x, 256, 80, color, 500, barWidth, 28);
+    text(period === 'before' ? 'Before' : 'After', x, 185, 24, colors.muted, 500, barWidth);
+    text(formatNumber(additions), x, 308, numberSize, colors.text, 750, barWidth, 28);
     const range = period === 'before'
       ? result.before.commits > 0 && result.firstCommitAt
         ? `${formatDate(result.firstCommitAt)} – ${formatDate(beforeEnd)}`
-        : `No counted commits before ${formatDate(result.cutoff)}`
+        : `Before ${formatDate(result.cutoff)}`
       : cutoffTime <= Date.parse(result.asOf)
         ? `${formatDate(result.cutoff)} – ${formatDate(result.asOf)}`
         : 'Cutoff falls after this snapshot';
-    text(range, x, 293, 17, colors.muted, 400, barWidth);
+    text(range, x, 351, 18, colors.muted, 400, barWidth);
     c.fillStyle = colors.track;
-    c.fillRect(x, 320, barWidth, 14);
-    // Both periods use one scale. Zero stays zero; tiny values are never inflated.
+    c.fillRect(x, 382, barWidth, 6);
+    // Zero stays zero; tiny values are never inflated.
     if (maximum > 0 && additions > 0) {
-      c.fillStyle = color;
-      c.fillRect(x, 320, additions / maximum * barWidth, 14);
+      c.fillStyle = period === 'after' ? colors.after : colors.before;
+      c.fillRect(x, 382, additions / maximum * barWidth, 6);
     }
   }
 
-  text(describeAdditionChange(result.before.additions, result.after.additions), 56, 395, 26, colors.text, 500);
   const partial = result.coverage.incomplete > 0 || result.coverage.unavailable > 0;
-  const coverage = `${result.coverage.completed}/${result.coverage.total} repositories complete${partial ? ` · partial (${result.coverage.incomplete} incomplete, ${result.coverage.unavailable} unavailable)` : ''}${result.includesPrivate ? ` · ${result.sample ? 'fictional private totals' : 'includes private totals'}` : ''}`;
-  const filterY = wrappedText(coverage, 445);
+  const contextParts = [
+    `${partial ? 'Partial · ' : ''}${result.coverage.completed}/${result.coverage.total} repos complete`,
+    ...(result.includesPrivate ? ['Includes private totals'] : []),
+  ];
   const filter = result.commitFilter;
-  if (filter?.enabled && (filter.scope === 'before' || filter.excludedBefore.commits + filter.excludedAfter.commits > 0)) {
-    wrappedText(describeCommitFilter(filter), filterY);
+  if (filter?.enabled) {
+    const excluded = filter.excludedBefore.commits + filter.excludedAfter.commits;
+    if (filter.scope === 'before' || excluded > 0) {
+      contextParts.push(`${formatNumber(excluded)} commit${excluded === 1 ? '' : 's'} excluded (>100k changed lines; ${filter.scope === 'before' ? 'before only, unequal filter' : 'both periods'})`);
+    }
   }
-
-  c.fillStyle = '#303030';
-  c.fillRect(56, 521, 1088, 1);
-  text('UTC dates · Unequal periods · Self-reported Git activity, not AI authorship or productivity.', 56, 552, 16, colors.quiet);
-  text('aidiff.cwb.sh · Code with Beto', 842, 604, 16, colors.quiet, 400, 302);
+  wrappedContext(contextParts.join(' · '));
+  text('aidiff.cwb.sh · Code with Beto', 56, 552, 18, colors.muted, 400);
   return new Promise((resolve, reject) => canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('Could not create the image.')), 'image/png'));
 }
 

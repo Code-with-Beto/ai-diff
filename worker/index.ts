@@ -1,6 +1,6 @@
 import type { CommitRecord, Installation, Repository, RepositoryPage, SessionInfo, Viewer } from '../shared/types';
 import { isNonForkRepository } from '../shared/repository-policy';
-import { ApiError, CONTRIBUTED_QUERY, externalFetch, github, OWNED_QUERY, PUBLIC_REPOSITORY_QUERY, SCAN_QUERY, SNAPSHOT_QUERY, VIEWER_QUERY } from './github';
+import { ApiError, CONTRIBUTED_QUERY, externalFetch, github, ORGANIZATION_QUERY, OWNED_QUERY, PUBLIC_REPOSITORY_QUERY, SCAN_QUERY, SNAPSHOT_QUERY, VIEWER_QUERY } from './github';
 import { challenge, cookie, decode, origin, randomString, readCookie, seal, sign, unseal, verify } from './security';
 
 export interface Env {
@@ -95,6 +95,17 @@ function positiveInteger(value: string | null, fallback?: number): number {
   return Number(value);
 }
 
+function organizationLogin(value: string | null): string {
+  const input = value?.trim() ?? '';
+  // Parse only supported GitHub profile forms. The input is never an outbound URL.
+  const profile = /^(?:https:\/\/)?github\.com\/(?:orgs\/([A-Za-z0-9-]+)(?:\/repositories)?|([A-Za-z0-9-]+))\/?$/i.exec(input);
+  const login = profile ? profile[1] ?? profile[2] : input;
+  if (!/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/.test(login)) {
+    throw new ApiError(400, 'invalid_organization', 'Enter a GitHub organization name or URL, such as Code-with-Beto or https://github.com/Code-with-Beto.');
+  }
+  return login;
+}
+
 function toRepository(value: RestRepository): Repository {
   if (!value || typeof value.fork !== 'boolean') throw new ApiError(502, 'github_incomplete', 'GitHub could not confirm repository fork status. Please retry.');
   return { id: value.node_id, nameWithOwner: value.full_name, isPrivate: value.private, isFork: value.fork, isArchived: value.archived, description: value.description };
@@ -110,10 +121,15 @@ function requireNonForkRepository(repository: { isFork: boolean }): void {
   if (!isNonForkRepository(repository)) throw new ApiError(403, 'forks_excluded', 'Forked repositories are excluded from AI Diff. Choose a non-fork repository.');
 }
 
-function repoPage(connection: RepoConnection): RepositoryPage {
-  if (!connection || !Array.isArray(connection.nodes) || !connection.pageInfo || (connection.pageInfo.hasNextPage && !connection.pageInfo.endCursor)) throw new ApiError(502, 'github_incomplete', 'GitHub returned an incomplete repository list. Please retry.');
+function repoPage(connection: RepoConnection, after: string | null = null, publicOnly = false): RepositoryPage {
+  if (!connection || !Array.isArray(connection.nodes) || !connection.pageInfo || typeof connection.pageInfo.hasNextPage !== 'boolean' || (connection.pageInfo.hasNextPage && (typeof connection.pageInfo.endCursor !== 'string' || !connection.pageInfo.endCursor || connection.pageInfo.endCursor.length > 2048 || connection.pageInfo.endCursor === after))) throw new ApiError(502, 'github_incomplete', 'GitHub returned an incomplete repository list. Please retry.');
+  let repositories = nonForkRepositories(connection.nodes);
+  if (publicOnly) {
+    if (repositories.some(repository => typeof repository.isPrivate !== 'boolean')) throw new ApiError(502, 'github_incomplete', 'GitHub could not confirm repository visibility. Please retry.');
+    repositories = repositories.filter(repository => repository.isPrivate === false);
+  }
   // Filtering a whole page to zero entries must not discard its next cursor.
-  return { repositories: nonForkRepositories(connection.nodes), cursor: connection.pageInfo.hasNextPage ? connection.pageInfo.endCursor : null, hasNextPage: connection.pageInfo.hasNextPage };
+  return { repositories, cursor: connection.pageInfo.hasNextPage ? connection.pageInfo.endCursor : null, hasNextPage: connection.pageInfo.hasNextPage };
 }
 
 async function authStart(env: Env): Promise<Response> {
@@ -184,11 +200,25 @@ async function repositories(env: Env, session: Session, url: URL): Promise<Respo
     if (!Array.isArray(data.repositories)) throw new ApiError(502, 'github_incomplete', 'GitHub returned an incomplete repository list. Please retry.');
     return json({ repositories: nonForkRepositories(data.repositories.map(toRepository)), hasNextPage, cursor: hasNextPage ? String(page + 1) : null } satisfies RepositoryPage);
   }
-  if (kind !== 'owned' && kind !== 'contributed') throw new ApiError(400, 'invalid_request', 'Choose an available repository list.');
+  if (kind !== 'owned' && kind !== 'contributed' && kind !== 'organization') throw new ApiError(400, 'invalid_request', 'Choose an available repository list.');
   const cursor = url.searchParams.get('cursor');
   if (cursor !== null) string(cursor, 2048);
+  if (kind === 'organization') {
+    const login = organizationLogin(url.searchParams.get('organization'));
+    const unavailable = () => new ApiError(404, 'organization_unavailable', 'This organization could not be found or read. Check its GitHub name and try again.');
+    try {
+      // Public organization history is independent of recent contribution discovery.
+      // No organization membership or additional installation permission is needed.
+      const { data } = await github<{ organization: { repositories: RepoConnection } | null }>(session.token, '/graphql', { query: ORGANIZATION_QUERY, variables: { login, after: cursor } });
+      if (!data.organization) throw unavailable();
+      return json(repoPage(data.organization.repositories, cursor, true));
+    } catch (error) {
+      if (error instanceof ApiError && error.code === 'repository_unavailable') throw unavailable();
+      throw error;
+    }
+  }
   const { data } = await github<{ viewer: { repositories?: RepoConnection; repositoriesContributedTo?: RepoConnection } }>(session.token, '/graphql', { query: kind === 'owned' ? OWNED_QUERY : CONTRIBUTED_QUERY, variables: { after: cursor } });
-  return json(repoPage((kind === 'owned' ? data.viewer.repositories : data.viewer.repositoriesContributedTo)!));
+  return json(repoPage((kind === 'owned' ? data.viewer.repositories : data.viewer.repositoriesContributedTo)!, cursor, true));
 }
 
 async function manualRepository(session: Session, input: Record<string, unknown>): Promise<Response> {

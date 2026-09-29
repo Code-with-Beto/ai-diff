@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { callbackMessage, comparisonDateAllowed, createOperationScope, isAuthenticationError, normalizeRepositoryUrl } from '../src/lib/client-state';
+import { callbackMessage, comparisonDateAllowed, createOperationScope, isAuthenticationError, normalizeRepositoryUrl, parseRepositorySource } from '../src/lib/client-state';
 
 describe('frontend request lifecycle', () => {
   it('rejects late results after a newer discovery request replaces the old one', () => {
@@ -59,5 +59,14 @@ describe('frontend boundary handling', () => {
     expect(callbackMessage('?auth=__proto__')).toBe('');
     expect(callbackMessage('?auth=constructor')).toBe('');
     expect(callbackMessage('?private=connected')).toBe('');
+  });
+  it.each(['Code-with-Beto', 'github.com/Code-with-Beto', 'https://github.com/Code-with-Beto/', 'https://github.com/orgs/Code-with-Beto/repositories'])('recognizes organization input %s without treating it as a repository', value => {
+    expect(parseRepositorySource(value)).toEqual({ kind: 'organization', login: 'Code-with-Beto' });
+  });
+  it.each(['Code-with-Beto/ai-diff', 'github.com/Code-with-Beto/ai-diff', 'https://github.com/Code-with-Beto/ai-diff'])('keeps repository input %s on the existing repository endpoint', value => {
+    expect(parseRepositorySource(value)).toEqual({ kind: 'repository', url: 'https://github.com/Code-with-Beto/ai-diff' });
+  });
+  it.each(['', 'https://evil.test/Code-with-Beto', 'https://github.com@evil.test/org', 'http://github.com/org', 'https://user:pass@github.com/org', 'https://github.com/org?tab=repositories', 'https://github.com/org#repositories', 'https://github.com/org/repo/tree/main', 'two--hyphens', 'https://github.com/orgs/org/people'])('rejects unsupported organization or repository source %s', value => {
+    expect(() => parseRepositorySource(value)).toThrow('Enter an organization');
   });
 });

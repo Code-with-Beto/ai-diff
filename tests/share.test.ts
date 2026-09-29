@@ -12,16 +12,17 @@ const fixture: ShareResult = {
 const raw = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url');
 
 async function recordImage(snapshot: ShareResult) {
-  const labels: { value: string; x: number; y: number; size: number; width: number; color: string }[] = [];
+  const labels: { value: string; x: number; y: number; size: number; weight: number; width: number; color: string }[] = [];
   const rectangles: { x: number; y: number; width: number; height: number; color: string }[] = [];
   const context = {
     fillStyle: '', font: '',
     measureText(value: string) { return { width: value.length * Number(this.font.match(/([\d.]+)px/)?.[1] ?? 16) * 0.6 }; },
-    fillText(value: string, x: number, y: number) { labels.push({ value, x, y, size: Number(this.font.match(/([\d.]+)px/)?.[1]), width: this.measureText(value).width, color: this.fillStyle }); },
+    fillText(value: string, x: number, y: number) { labels.push({ value, x, y, size: Number(this.font.match(/([\d.]+)px/)?.[1]), weight: Number(this.font.split(' ')[0]), width: this.measureText(value).width, color: this.fillStyle }); },
     fillRect(x: number, y: number, width: number, height: number) { rectangles.push({ x, y, width, height, color: this.fillStyle }); },
   };
-  vi.stubGlobal('document', { fonts: { ready: Promise.resolve() }, createElement: () => ({ getContext: () => context, toBlob: (callback: (value: Blob) => void) => callback(new Blob(['image'], { type: 'image/png' })) }) });
-  try { await renderShareImage(snapshot); return { labels, rectangles }; }
+  const canvas = { width: 0, height: 0, getContext: () => context, toBlob: (callback: (value: Blob) => void) => callback(new Blob(['image'], { type: 'image/png' })) };
+  vi.stubGlobal('document', { fonts: { ready: Promise.resolve() }, createElement: () => canvas });
+  try { const blob = await renderShareImage(snapshot); return { labels, rectangles, width: canvas.width, height: canvas.height, blob }; }
   finally { vi.unstubAllGlobals(); }
 }
 
@@ -136,6 +137,28 @@ describe('added-line change wording', () => {
 });
 
 describe('share image comparison', () => {
+  it('exports a 2:1 PNG with equally prominent bold neutral totals', async () => {
+    const image = await recordImage(fixture);
+    expect([image.width, image.height]).toEqual([1200, 600]);
+    expect(image.width / image.height).toBe(2);
+    expect(image.blob.type).toBe('image/png');
+    const numbers = image.labels.filter(label => label.value === '20,000' || label.value === '60,000');
+    expect(numbers).toHaveLength(2);
+    expect(numbers[0].size).toBe(108);
+    expect(numbers[1].size).toBe(numbers[0].size);
+    for (const label of numbers) {
+      expect(label.weight).toBeGreaterThanOrEqual(700);
+      expect(label.color).toBe('#f5f5f5');
+    }
+    expect(numbers[0].x + numbers[0].width).toBeLessThan(600);
+    expect(numbers[1].x).toBeGreaterThan(600);
+    expect(image.labels.some(label => label.color === '#38bdf8')).toBe(false);
+    const unequalDigits = await recordImage({ ...fixture, before: { ...fixture.before, additions: 1_000_000 }, after: { ...fixture.after, additions: 50 } });
+    const longNumber = unequalDigits.labels.find(label => label.value === '1,000,000');
+    const shortNumber = unequalDigits.labels.find(label => label.value === '50');
+    expect(longNumber?.size).toBe(shortNumber?.size);
+  });
+
   it.each([[20_000, 60_000], [60_000, 20_000], [20_000, 20_000]])('renders %i before and %i after on exactly the same bar scale', async (before, after) => {
     const rendered = await recordImage({ ...fixture, before: { ...fixture.before, additions: before }, after: { ...fixture.after, additions: after } });
     const tracks = rendered.rectangles.filter(rectangle => rectangle.color === '#242424');
@@ -146,17 +169,19 @@ describe('share image comparison', () => {
     expect(beforeBar?.width).toBeCloseTo(before / Math.max(before, after) * tracks[0].width);
     expect(afterBar?.width).toBeCloseTo(after / Math.max(before, after) * tracks[0].width);
     expect(beforeBar?.width! / afterBar?.width!).toBeCloseTo(before / after);
-    expect(rendered.labels.map(label => label.value)).toContain(describeAdditionChange(before, after));
+    expect(tracks.every(track => track.height === 6)).toBe(true);
+    expect(rendered.labels.map(label => label.value)).not.toContain(describeAdditionChange(before, after));
   });
 
   it('draws no artificial bar for zero totals and handles a missing baseline', async () => {
     const zero = { ...fixture, before: { additions: 0, deletions: 0, commits: 0 }, after: { additions: 0, deletions: 0, commits: 0 }, firstCommitAt: null };
     const empty = await recordImage(zero);
     expect(empty.rectangles.filter(rectangle => rectangle.color === '#bdbdbd' || rectangle.color === '#38bdf8')).toEqual([]);
-    expect(empty.labels.map(label => label.value)).toContain('No lines added in either period');
+    expect(empty.labels.filter(label => label.value === '0')).toHaveLength(2);
     const afterOnly = await recordImage({ ...zero, after: { additions: 50, deletions: 0, commits: 1 }, firstCommitAt: '2025-09-29T12:00:00.000Z' });
     expect(afterOnly.rectangles.some(rectangle => rectangle.color === '#bdbdbd')).toBe(false);
-    expect(afterOnly.labels.map(label => label.value)).toContain('50 more lines after · no before baseline');
+    expect(afterOnly.labels.map(label => label.value)).toContain('50');
+    expect(afterOnly.rectangles.find(rectangle => rectangle.color === '#38bdf8')?.width).toBe(504);
   });
 
   it('keeps one units heading, actual ranges and the necessary disclosures without old detail clutter', async () => {
@@ -167,23 +192,23 @@ describe('share image comparison', () => {
     expect(values).toContain('After');
     expect(values).toContain('Jan 1, 2019 – Sep 28, 2025');
     expect(values).toContain('Sep 29, 2025 – Sep 29, 2026');
-    expect(values.join(' ')).toContain('partial (2 incomplete, 1 unavailable)');
-    expect(values.join(' ')).toContain('fictional private totals');
-    expect(values.join(' ')).toContain('sample data');
-    expect(values).toContain('UTC dates · Unequal periods · Self-reported Git activity, not AI authorship or productivity.');
+    expect(values.join(' ')).toContain('Partial · 3/6 repos complete');
+    expect(values.join(' ')).toContain('Includes private totals');
+    expect(values.join(' ')).toContain('Sample data');
     expect(values).toContain('aidiff.cwb.sh · Code with Beto');
-    expect(values.join(' ')).not.toMatch(/SHARED SNAPSHOT|My GitHub|commits · .*deleted|All commit sizes|Illustrative sample|Snapshot as of/);
+    expect(values.join(' ')).not.toMatch(/SHARED SNAPSHOT|My GitHub|commits · .*deleted|All commit sizes|Illustrative sample|Snapshot as of|Self-reported|authorship|productivity|%/);
+    expect(values).toHaveLength(10);
   });
 
   it('only adds filter context when it changed totals or treats the periods differently', async () => {
     const zero = { additions: 0, deletions: 0, commits: 0 };
     const filter = { enabled: true, threshold: 100_000, scope: 'both' as const, excludedBefore: zero, excludedAfter: zero };
     const unchanged = await recordImage({ ...fixture, commitFilter: filter });
-    expect(unchanged.labels.some(label => label.value.includes('Size filter'))).toBe(false);
+    expect(unchanged.labels.some(label => label.value.includes('excluded'))).toBe(false);
     const unequal = await recordImage({ ...fixture, commitFilter: { ...filter, scope: 'before' } });
-    expect(unequal.labels.map(label => label.value).join(' ')).toContain('0 commits excluded · before only (unequal filter)');
+    expect(unequal.labels.map(label => label.value).join(' ')).toContain('0 commits excluded (>100k changed lines; before only, unequal filter)');
     const changed = await recordImage({ ...fixture, commitFilter: { ...filter, excludedAfter: { additions: 100_001, deletions: 0, commits: 1 } } });
-    expect(changed.labels.map(label => label.value).join(' ')).toContain('1 commit excluded · both periods');
+    expect(changed.labels.map(label => label.value).join(' ')).toContain('1 commit excluded (>100k changed lines; both periods)');
   });
 
   it('fits long handles, maximum safe totals and long filter disclosures without overlap', async () => {
@@ -201,13 +226,14 @@ describe('share image comparison', () => {
         excludedAfter: { additions: 4_100_000_000_000_000, deletions: 0, commits: 40_000_000_000 },
       },
     };
-    for (const snapshot of [large, filtered]) {
+    const unequal: ShareResult = { ...filtered, commitFilter: { ...filtered.commitFilter!, scope: 'before', excludedAfter: { additions: 0, deletions: 0, commits: 0 } } };
+    for (const snapshot of [large, filtered, unequal]) {
       const { labels } = await recordImage(snapshot);
       for (const label of labels) {
         expect(label.x).toBeGreaterThanOrEqual(56);
         expect(label.x + label.width).toBeLessThanOrEqual(1144);
         expect(label.y - label.size).toBeGreaterThanOrEqual(0);
-        expect(label.y + label.size * 0.2).toBeLessThan(630);
+        expect(label.y + label.size * 0.2).toBeLessThan(600);
         expect(label.size).toBeGreaterThanOrEqual(14);
       }
       for (let index = 0; index < labels.length; index++) {
