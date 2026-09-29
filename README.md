@@ -8,7 +8,7 @@ Explore your GitHub history around the day AI became part of your workflow. Conn
 
 Free to use, open source, and designed to run without a database or an AI API bill.
 
-![AI Diff sample report with before-and-after additions and a monthly activity chart](docs/preview.png)
+![AI Diff sample report with before-and-after additions and a monthly activity chart](docs/preview.jpg)
 
 *Preview uses fictional sample data.*
 
