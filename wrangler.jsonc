@@ -8,7 +8,8 @@
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
     "run_worker_first": [
-      "/api/*"
+      "/api/*",
+      "/s/*"
     ]
   },
   "vars": {
@@ -32,9 +33,23 @@
         "limit": 120,
         "period": 60
       }
+    },
+    {
+      "name": "SHARE_LIMITER",
+      "namespace_id": "1003",
+      "simple": {
+        "limit": 5,
+        "period": 60
+      }
     }
   ],
   "observability": {
     "enabled": false
-  }
+  },
+  "kv_namespaces": [
+    {
+      "binding": "SHARE_RESULTS",
+      "id": "00000000000000000000000000000000"
+    }
+  ]
 }

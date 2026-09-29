@@ -13,7 +13,7 @@ Compare your GitHub activity before and after you started using AI. Connect GitH
 - Discover public repositories you own or recently contributed to. Add a public organization to load its repositories, or add a repository by URL.
 - Include private repositories through selected GitHub App installations. Private organization access may require an owner’s approval.
 - Choose an AI release date or your own cutoff. Change the date and filters after scanning without fetching the history again.
-- Explore additions, deletions, monthly activity, and repository coverage. Copy or download a result image, or share a result link.
+- Explore additions, deletions, monthly activity, and repository coverage. Copy or download a result image, or create a short public link with that image as its social preview.
 
 AI Diff counts **lines added in default-branch commits whose primary author matches your GitHub account**. It excludes forks and merge commits, deduplicates commit SHAs, and splits the periods at midnight UTC.
 
@@ -34,7 +34,7 @@ npm run dev
 
 Open **http://127.0.0.1:5173** and try the sample report. No credentials are needed.
 
-For real GitHub sign-in, follow [GitHub App configuration](README-backend.md#configuration). The app uses React, TypeScript, Vite, and a small Cloudflare Worker. No database, repository cloning, or AI API is required.
+For real GitHub sign-in, follow [GitHub App configuration](README-backend.md#configuration). The app uses React, TypeScript, Vite, and a small Cloudflare Worker. Optional public links use Cloudflare KV. No repository cloning or AI API is required.
 
 ## Checks
 
@@ -49,7 +49,7 @@ Run `npm run test:git` when changing counting logic. It checks the calculation a
 
 See the [backend guide](README-backend.md) for configuration, API contracts, [deployment](README-backend.md#deploying-your-own-instance), and [privacy details](README-backend.md#privacy-and-sharing).
 
-GitHub access is read-only. Analysis stays in browser memory, and images are generated locally. Private repository names are left out of shared results.
+GitHub access is read-only. Analysis stays in browser memory, and images are generated locally. **Create public link** stores only the aggregate summary and the exact preview PNG. Anyone with the link can see them; sharing private totals requires explicit consent. Repository names and raw commits are left out. Downloads and long result links remain available if publishing reaches the free limits.
 
 ## Contributing
 

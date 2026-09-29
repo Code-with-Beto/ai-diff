@@ -2,6 +2,7 @@ import type { CommitRecord, Installation, Repository, RepositoryPage, SessionInf
 import { isNonForkRepository } from '../shared/repository-policy';
 import { ApiError, CONTRIBUTED_QUERY, externalFetch, github, ORGANIZATION_QUERY, OWNED_QUERY, PUBLIC_REPOSITORY_QUERY, SCAN_QUERY, SNAPSHOT_QUERY, VIEWER_QUERY } from './github';
 import { challenge, cookie, decode, origin, randomString, readCookie, seal, sign, unseal, verify } from './security';
+import { publicShare, publicShareError, publishShare, SHARE_BODY_LIMIT, type ShareStore } from './sharing';
 
 export interface Env {
   SESSION_SECRET: string;
@@ -12,6 +13,8 @@ export interface Env {
   ASSETS: { fetch(request: Request): Promise<Response> };
   AUTH_LIMITER?: { limit(options: { key: string }): Promise<{ success: boolean }> };
   API_LIMITER?: { limit(options: { key: string }): Promise<{ success: boolean }> };
+  SHARE_LIMITER?: { limit(options: { key: string }): Promise<{ success: boolean }> };
+  SHARE_RESULTS?: ShareStore;
 }
 
 interface Session { version: 1; sessionId: string; user: Viewer; token: string; csrfToken: string; expiresAt: number }
@@ -61,7 +64,7 @@ function checkCsrf(request: Request, env: Env, session: Session): void {
   }
 }
 
-async function body(request: Request): Promise<Record<string, unknown>> {
+async function body(request: Request, limit = 8192): Promise<Record<string, unknown>> {
   if (!request.headers.get('Content-Type')?.toLowerCase().startsWith('application/json')) throw new ApiError(415, 'invalid_request', 'Send a JSON request.');
   const reader = request.body?.getReader();
   if (!reader) throw new ApiError(400, 'invalid_request', 'A request body is required.');
@@ -71,7 +74,7 @@ async function body(request: Request): Promise<Record<string, unknown>> {
     const { done, value } = await reader.read();
     if (done) break;
     size += value.byteLength;
-    if (size > 8192) { await reader.cancel(); throw new ApiError(413, 'invalid_request', 'This request is too large.'); }
+    if (size > limit) { await reader.cancel(); throw new ApiError(413, 'invalid_request', 'This request is too large.'); }
     chunks.push(value);
   }
   const buffer = new Uint8Array(size);
@@ -292,6 +295,11 @@ async function route(request: Request, env: Env, url: URL): Promise<Response> {
   // Always let an authenticated user revoke and clear a session, even after a scan hits the limit.
   if (path === '/api/auth/logout' && request.method === 'POST') return logout(env, session);
   await enforceLimit(env.API_LIMITER, `user:${session.user.id}`);
+  if (path === '/api/share' && request.method === 'POST') {
+    await enforceLimit(env.SHARE_LIMITER, `share:user:${session.user.id}`);
+    await enforceLimit(env.SHARE_LIMITER, `share:ip:${request.headers.get('CF-Connecting-IP') ?? 'unknown'}`);
+    return publishShare(env, session.user, await body(request, SHARE_BODY_LIMIT));
+  }
   if (path === '/api/github/install' && request.method === 'POST') {
     const state: InstallState = { state: randomString(), sessionId: session.sessionId, expiresAt: now() + 1800 };
     const response = json({ url: `https://github.com/apps/${encodeURIComponent(env.GITHUB_APP_SLUG)}/installations/new?state=${state.state}` });
@@ -328,10 +336,34 @@ function secureResponse(response: Response): Response {
   return secured;
 }
 
+async function cachedPublicShare(request: Request, env: Env, url: URL, context?: { waitUntil(promise: Promise<unknown>): void }): Promise<Response> {
+  let cache: Cache | undefined;
+  let key: Request | undefined;
+  if (context && ['GET', 'HEAD'].includes(request.method)) {
+    try {
+      cache = typeof caches === 'undefined' ? undefined : (caches as CacheStorage & { default?: Cache }).default;
+      // Public content depends only on the immutable path, never cookies or query strings.
+      if (cache) {
+        key = new Request(`${origin(env)}${url.pathname}`, { method: 'GET' });
+        const cached = await cache.match(key);
+        if (cached?.status === 200) return request.method === 'HEAD' ? new Response(null, cached) : cached;
+      }
+    } catch { cache = undefined; key = undefined; }
+  }
+  // A HEAD miss generates a full GET response so no empty body enters the cache.
+  const response = await publicShare(request.method === 'HEAD' ? new Request(request.url, { method: 'GET' }) : request, env, url.pathname);
+  if (cache && key && context && response.status === 200) {
+    try { context.waitUntil(cache.put(key, response.clone()).catch(() => {})); }
+    catch { /* Caching is an optimization; a failure must not break a valid share. */ }
+  }
+  return request.method === 'HEAD' ? new Response(null, response) : response;
+}
+
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, context?: { waitUntil(promise: Promise<unknown>): void }): Promise<Response> {
     const url = new URL(request.url);
-    if (!url.pathname.startsWith('/api/')) return secureResponse(await env.ASSETS.fetch(request));
+    const sharedPath = url.pathname.startsWith('/s/');
+    if (!url.pathname.startsWith('/api/') && !sharedPath) return secureResponse(await env.ASSETS.fetch(request));
     let response: Response;
     let clearLogout = false;
     let clearStaleSession = false;
@@ -342,7 +374,7 @@ export default {
         checkCsrf(request, env, session);
         clearLogout = true;
       }
-      response = await route(request, env, url);
+      response = sharedPath ? await cachedPublicShare(request, env, url, context) : await route(request, env, url);
     } catch (error) {
       const failure = error instanceof ApiError ? error : new ApiError(500, 'server_error', 'The request could not be completed. Please try again.');
       if (url.pathname === '/api/auth/github/callback') console.warn('auth_callback_failed', failure.code);
@@ -350,7 +382,8 @@ export default {
       const browserAuthRoute = request.method === 'GET' && ['/api/auth/github/start', '/api/auth/github/callback', '/api/github/setup'].includes(url.pathname);
       let appOrigin: string | null = null;
       try { appOrigin = origin(env); } catch { /* An invalid configured origin must never become a redirect. */ }
-      if (browserAuthRoute && appOrigin) {
+      if (sharedPath) response = publicShareError(failure.message, failure.status, request.method === 'HEAD');
+      else if (browserAuthRoute && appOrigin) {
         const auth = failure.code === 'rate_limited' ? 'rate_limited' : url.pathname === '/api/github/setup' ? 'installation_failed' : failure.code === 'invalid_oauth_state' || failure.code === 'session_expired' ? 'expired' : 'failed';
         response = redirect(`${appOrigin}/?auth=${auth}`);
       } else {

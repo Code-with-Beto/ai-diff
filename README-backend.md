@@ -22,6 +22,8 @@ Authentication uses GitHub's authorization-code flow with S256 PKCE and a server
 
 Production also binds `AUTH_LIMITER` at 20 requests per 60 seconds and `API_LIMITER` at 120 requests per 60 seconds. OAuth starts are limited by Cloudflare's client IP; repository and scan requests are limited by the authenticated user's stable GitHub ID. These optional bindings may be omitted in unit tests/local development. Rejected API calls return `429` with `retryAfter: 60`; browser sign-in journeys redirect to a safe `auth=rate_limited` status. Logout is exempt so users can always revoke and clear their session after a throttled scan.
 
+Public-link publishing uses the `SHARE_RESULTS` KV namespace and `SHARE_LIMITER`, configured for five requests per 60 seconds. The limiter checks both `share:user:<GitHub user ID>` and `share:ip:<Cloudflare client IP>`. Real results require an authenticated session whose handle matches the summary, same-origin and CSRF checks, and explicit publication consent. Sample links use fixed assets and do not write to KV.
+
 These counters are local to each Cloudflare location and eventually consistent. They are not exact global accounting or a daily-spend cap. See [Cloudflare Rate Limiting locality and accuracy](https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/).
 
 ## API
@@ -43,6 +45,9 @@ All API responses use `Cache-Control: no-store`. All authenticated POST routes r
 | `POST /api/github/repository` | `{url}` → `{repository}`; only public `https://github.com/owner/repo` URLs. |
 | `POST /api/scan/start` | `{repositoryId,includePrivate,asOf}` → `ScanStart`. Takes a snapshot of the default HEAD. |
 | `POST /api/scan/page` | `{handle}` → `ScanPage`. Reads at most 100 author-filtered commits and returns the next signed handle. |
+| `POST /api/share` | `{result:ShareResult,imageTheme:"light"\|"dark",image:<base64 PNG>,publishConsent:true}` → `{url,imageUrl,imageTheme}`. Requires authentication, a matching handle, `sample:false`, and CSRF. Maximum request body: 280 KiB; decoded PNG: 192 KiB at exactly 1200 × 600. |
+
+Public `GET`/`HEAD /s/<id>` returns a share page with server-rendered Open Graph metadata; `/s/<id>/image.png` returns the stored PNG. These public responses may be cached and do not require GitHub sign-in. `/s/sample-light` and `/s/sample-dark`, including their image routes, serve the fixed `share-sample.json` and `share-sample-{theme}.png` assets without KV storage. There is no anonymous publish endpoint.
 
 Browser OAuth failures redirect to the fixed home origin with only an allowlisted status: `auth=cancelled`, `auth=expired`, `auth=failed`, or `auth=rate_limited`. Installation-return failures use `auth=installation_failed`. The frontend should translate these to static recovery messages without reflecting query text.
 
@@ -62,19 +67,21 @@ Automatic discovery combines owned public repositories and GitHub's recently con
 
 Inaccessible, deleted, non-default-branch, unpushed, or unmatched-author history cannot be counted. Never interpret an unavailable or incomplete repository as zero. A partial GraphQL response causes an error; retry the same signed page rather than advancing the cursor. Rate-limit responses include retry guidance. Repository enumeration is paginated without an artificial career-history cap.
 
-There is no database, persistent server scan job, general GitHub proxy, or token exposed to browser JavaScript. The browser owns scan progress and aggregated results. The Worker checks current repository visibility on every scan page and stops if a public snapshot becomes private, requiring explicit private selection and a new scan. Stateless handles are not a global traffic rate limiter; the production bindings add Cloudflare rate limits. Recheck production cookies, OAuth, selected private-repository access, and Worker CPU after changes to these boundaries.
+There is no persistent server scan job, general GitHub proxy, or token exposed to browser JavaScript. The browser owns scan progress and aggregated results; only explicitly published aggregate snapshots are stored in KV. The Worker checks current repository visibility on every scan page and stops if a public snapshot becomes private, requiring explicit private selection and a new scan. Stateless handles are not a global traffic rate limiter; the production bindings add Cloudflare rate limits. Recheck production cookies, OAuth, selected private-repository access, and Worker CPU after changes to these boundaries.
 
 ## Privacy and sharing
 
 GitHub's Contents permission technically permits reading source code. AI Diff requests commit metadata and line counts, not source files or patches. Tokens remain encrypted in expiring HttpOnly session cookies and are never exposed to browser JavaScript. Refresh tokens are discarded. Logout attempts revocation and clears local session state even when revocation fails.
 
-Analysis stays in browser memory, so reloading starts a new scan. Only the light/dark preference is saved in local browser storage. There are no third-party tracking scripts or stored server-side reports. GitHub and the hosting provider still process requests as part of operating their services.
+Analysis stays in browser memory, so reloading starts a new scan. Only the light/dark preference is saved in local browser storage. There are no third-party tracking scripts. Scanning does not persist a report or upload an image for sharing. GitHub and the hosting provider still process requests as part of operating their services.
 
-Share images are generated locally. Result links contain an aggregate summary in the URL fragment, after `#`, which is not sent to the server. Private repository names and raw commits are omitted. Sharing totals that include private contributions requires explicit acknowledgment.
+Share images are generated locally. Previewing, copying, or downloading one does not upload it. **Create public link** uploads the selected export PNG and aggregate summary, with explicit consent for private totals. A real public snapshot is stored under a random 16-character ID as one immutable KV value: a four-byte header length, a JSON header containing the validated result, theme and creation time, then the exact PNG bytes. This takes one KV write and avoids storing the PNG as base64. No source files, repository names, raw commits, or GitHub credentials are part of the shared record.
 
 The 1200 × 600 PNG supports light and dark export themes, initially matching the interface. Changing the export theme does not change the website theme or private-sharing consent. One continuous line shows the before/after portions of the combined counted additions; its blue segment is the portion on or after the comparison date. Both-zero totals leave a neutral line.
 
-A result link preserves the numbers chosen at the time of sharing; opening it does not fetch GitHub again. Anyone with the full link can read, edit, or reshare the summary. AI Diff does not independently verify those shared numbers. Social previews describe the app; opening the full link displays the result.
+A short public link preserves the numbers and image chosen at publication; opening it does not fetch GitHub again. Its HTML points social crawlers to the exact 1200 × 600 PNG, including the chosen light or dark theme. Published snapshots have no automatic expiry. Anyone with a link can view and reshare it, and social platforms may retain cached copies. Signing out does not remove a published snapshot. AI Diff does not independently verify submitted numbers or the image's claims.
+
+Existing long links under `/share#...` continue to work. They carry the aggregate summary in the URL fragment, which is not sent to the server; anyone with the full link can read, edit, or reshare it. They have the app's generic social preview until the user explicitly creates a public link. If public-link storage is unavailable or reaches a free quota, image downloads and the long-link fallback remain available.
 
 ## Development reference
 
@@ -90,7 +97,7 @@ A result link preserves the numbers chosen at the time of sharing; opening it do
 | `npm run check:deploy` | Build and validate deployment without publishing |
 | `npm run deploy` | Build and publish the configured Worker |
 
-The React + TypeScript + Vite client owns scan progress, in-memory aggregation, charts, and image generation. The same-origin Cloudflare Worker owns authentication, encrypted sessions, request validation, and bounded GitHub GraphQL/REST reads. There are no repository clones, background jobs, AI inference calls, or persistent result storage.
+The React + TypeScript + Vite client owns scan progress, in-memory aggregation, charts, and image generation. The same-origin Cloudflare Worker owns authentication, encrypted sessions, request validation, bounded GitHub GraphQL/REST reads, and explicitly published KV snapshots. There are no repository clones, background jobs, or AI inference calls.
 
 ### Keyboard shortcuts
 
@@ -127,6 +134,49 @@ cp wrangler.jsonc wrangler.local.jsonc
 ```
 
 In `wrangler.local.jsonc`, choose your own Worker name and Cloudflare account. Set `APP_ORIGIN` to your exact HTTPS origin, and set `GITHUB_CLIENT_ID` and `GITHUB_APP_SLUG` for your own GitHub App. If using a custom domain, add a `routes` entry for that domain. Do not reuse the hosted AI Diff application's callback or credentials.
+
+### Public-link storage
+
+Create a KV namespace in your own account:
+
+```sh
+npx wrangler login
+npx wrangler kv namespace create SHARE_RESULTS --config wrangler.local.jsonc --update-config=false
+```
+
+Use the returned namespace ID for `SHARE_RESULTS` in `wrangler.local.jsonc`. Merge these fields into the existing configuration, keeping the authentication/API limiters and other asset settings. Choose an unused rate-limit namespace ID for your account:
+
+```jsonc
+{
+  "kv_namespaces": [
+    { "binding": "SHARE_RESULTS", "id": "<your-namespace-id>" }
+  ],
+  "ratelimits": [
+    // Keep AUTH_LIMITER and API_LIMITER here too.
+    { "name": "SHARE_LIMITER", "namespace_id": "1003", "simple": { "limit": 5, "period": 60 } }
+  ],
+  "assets": {
+    "directory": "./dist/client",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*", "/s/*"]
+  }
+}
+```
+
+The `/s/*` Worker-first route is required: otherwise the SPA fallback can answer a social crawler before the Worker adds result-specific metadata. Local development uses locally simulated KV; do not enable a remote binding for ordinary sample or test work. Sample previews are fixed assets and require neither publishing credentials nor KV writes. See [KV namespace commands](https://developers.cloudflare.com/kv/reference/kv-commands/) and [selective Worker-first routing](https://developers.cloudflare.com/workers/static-assets/routing/worker-script/#run-worker-first-for-selective-paths).
+
+Use the Cache API only for public share pages and images; never cache authentication, scan responses, or publishing requests. KV is eventually consistent, so a new link may take time to become visible in another region. Missing-key reads are also cached by KV; avoid caching missing share responses at the HTTP layer. See [KV consistency](https://developers.cloudflare.com/kv/concepts/how-kv-works/) and [Cache API behavior](https://developers.cloudflare.com/workers/runtime-apis/cache/). Do not enable Worker-wide caching as a quota workaround: [Workers Cache pricing](https://developers.cloudflare.com/workers/cache/#pricing) counts even normally-free static asset requests at the standard Worker request rate when enabled.
+
+### Free-plan boundaries
+
+On **Workers Free**, KV includes 1 GB of storage, 100,000 key reads/day, and 1,000 each of writes, deletes, and list requests/day. Daily limits reset at midnight UTC; operations fail when their allowance is exhausted. A new real snapshot takes one KV write. These are account allowances, not a guaranteed per-app budget. KV metadata is limited to 1,024 bytes, so the aggregate and PNG are stored together in the value rather than in metadata. See [KV pricing](https://developers.cloudflare.com/kv/platform/pricing/) and [KV limits](https://developers.cloudflare.com/kv/platform/limits/).
+
+Workers Free allows 100,000 dynamic requests/day and 10 ms of CPU per invocation. Cached share handlers still consume Worker requests; caching reduces KV reads. The app does not render PNGs on the server, create an R2 subscription, or enable a paid plan automatically. If quotas prevent publishing, keep using local exports or the long result link. No automatic snapshot expiry is used, so storage capacity must be monitored. See [Workers limits](https://developers.cloudflare.com/workers/platform/limits/).
+
+Confirm the account's **Workers** plan in Cloudflare's dashboard before relying on the free-plan failure behavior; a zone's Free plan does not establish the Workers billing plan. `wrangler whoami` confirms authentication but does not report that plan. A read-only [account subscriptions API](https://developers.cloudflare.com/api/resources/accounts/subresources/subscriptions/methods/get/) request requires Billing Read access. Never print authentication tokens while checking it.
+
+### Publish the deployment
 
 Store secrets in Cloudflare:
 

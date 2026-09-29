@@ -5,6 +5,7 @@ import { ApiError, api, waitForRetry } from './api';
 import { analyzeCommits, formatDate, formatNumber } from './lib/analysis';
 import { SAMPLE_AS_OF, SAMPLE_COMMITS, SAMPLE_REPOSITORIES, SAMPLE_USER } from './lib/sample';
 import { createShareResult, decodeShare, describeAdditionChange } from './lib/share';
+import { readPublishedShare } from './lib/published-share';
 import { isNonForkRepository } from '../shared/repository-policy';
 import { callbackMessage, comparisonDateAllowed, createOperationScope, isAuthenticationError, parseRepositorySource } from './lib/client-state';
 import About from './components/About';
@@ -72,7 +73,8 @@ function Result({ result, login, sample, share, shared = false }: { result: Anal
   </section>;
 }
 export default function App() {
-  const isAbout = window.location.pathname === '/about', isShared = window.location.pathname === '/share';
+  const published = useMemo(readPublishedShare, []);
+  const isAbout = window.location.pathname === '/about', isShared = window.location.pathname === '/share' || !!published;
   const [session, setSession] = useState<SessionInfo | null>(null), [sessionFailed, setSessionFailed] = useState(false);
   const [connectionExpired, setConnectionExpired] = useState(false);
   const [cutoff, setCutoff] = useState(DEFAULT_DATE), [customDate, setCustomDate] = useState(false);
@@ -85,7 +87,7 @@ export default function App() {
   const [commits, setCommits] = useState<CommitRecord[]>([]), [progress, setProgress] = useState<RepositoryProgress[]>([]), [asOf, setAsOf] = useState(new Date().toISOString());
   const [scanning, setScanning] = useState(false), [scanMessage, setScanMessage] = useState(''), [error, setError] = useState('');
   const [callbackError, setCallbackError] = useState(() => callbackMessage(window.location.search));
-  const [share, setShare] = useState<ShareResult | null>(null), [sharedResult, setSharedResult] = useState(() => isShared ? decodeShare(window.location.hash) : null);
+  const [share, setShare] = useState<ShareResult | null>(null), [sharedResult, setSharedResult] = useState(() => published?.result ?? (isShared ? decodeShare(window.location.hash) : null));
   const operations = useRef(createOperationScope());
   const repositorySearch = useRef<HTMLInputElement>(null);
   const knownRepositories = useRef(new Set<string>());
@@ -93,11 +95,11 @@ export default function App() {
 
   useEffect(() => () => operations.current.invalidateAll(), []);
   useEffect(() => {
-    if (!isShared) return;
+    if (!isShared || published) return;
     const changed = () => { setShare(null); setSharedResult(decodeShare(window.location.hash)); };
     window.addEventListener('hashchange', changed);
     return () => window.removeEventListener('hashchange', changed);
-  }, [isShared]);
+  }, [isShared, published]);
   useEffect(() => {
     if (isAbout || isShared) return;
     const task = operations.current.start('session');
@@ -365,7 +367,7 @@ export default function App() {
     return () => window.removeEventListener('keydown', key);
   }, [isAbout, isShared, authenticated, sample, scanning, selectedCount, loadingRepos, addingRepo, installing, selectedRepositories]);
   if (isAbout) return <div className="app-shell"><Header logout={() => {}} /><About /><Footer /></div>;
-  if (isShared) { const aggregate: AnalysisResult | null = sharedResult ? { ...sharedResult, months: [], ratio: sharedResult.before.additions ? sharedResult.after.additions / sharedResult.before.additions : null } : null; return <div className="app-shell"><Header logout={() => {}} /><main className="shared-page"><div className="shared-intro"><h1>Before and after AI.</h1><p>Lines added through your GitHub commits.</p></div>{aggregate && sharedResult ? <Result result={aggregate} login={sharedResult.login} sample={sharedResult.sample} shared share={() => setShare(sharedResult)} /> : <div className="empty-result"><CircleHelp size={30} /><h2>This result link isn’t valid.</h2><p>It may be incomplete or use an unsupported format.</p></div>}<a href="/" className="button primary shared-cta"><Github size={18} />Compare your history</a></main><Footer />{share && <ShareDialog result={share} close={() => setShare(null)} />}</div>; }
+  if (isShared) { const aggregate: AnalysisResult | null = sharedResult ? { ...sharedResult, months: [], ratio: sharedResult.before.additions ? sharedResult.after.additions / sharedResult.before.additions : null } : null; return <div className="app-shell"><Header logout={() => {}} /><main className="shared-page"><div className="shared-intro"><h1>Before and after AI.</h1><p>Lines added through your GitHub commits.</p></div>{aggregate && sharedResult ? <Result result={aggregate} login={sharedResult.login} sample={sharedResult.sample} shared share={() => setShare(sharedResult)} /> : <div className="empty-result"><CircleHelp size={30} /><h2>This result link isn’t valid.</h2><p>It may be incomplete or use an unsupported format.</p></div>}<a href="/" className="button primary shared-cta"><Github size={18} />Compare your history</a></main><Footer />{share && <ShareDialog result={share} publishedShare={published?.publishedShare} close={() => setShare(null)} />}</div>; }
   return <div className="app-shell"><Header user={authenticated ? session?.user?.login : undefined} logout={() => void disconnect()} /><main>
     <section className="intro"><h1>Before and after AI.</h1><p>Lines added to your GitHub history, split by date.</p></section>
     <div className="workspace"><aside className="setup-panel" aria-label="Analysis settings"><div className="connection-settings"><div className="panel-step"><h2>GitHub</h2></div>

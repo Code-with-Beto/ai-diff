@@ -44,14 +44,15 @@ export default function About() {
           <p>Public repositories work with GitHub sign-in. Private repositories are optional and require installing our read-only GitHub App on repositories you select.</p>
           <p>GitHub’s Contents permission technically allows reading code. AI Diff requests commit metadata and line counts. It does not fetch source files, clone repositories, or send code to an AI model.</p>
           <p>Your GitHub credential is encrypted in an expiring, HttpOnly session cookie. Our server uses it for the requested GitHub reads; client-side JavaScript cannot read it. We do not keep refresh tokens. Disconnecting clears the session and attempts to revoke its GitHub token.</p>
-          <p>Analysis data lives in your browser’s memory and passes through the server only to retrieve GitHub responses. We do not save a copy in a database, record commit data in application logs, or include third-party tracking scripts. Reloading starts a new analysis. Only your light/dark preference is saved in local browser storage. GitHub and our hosting provider still process requests to operate their services.</p>
+          <p>Analysis data lives in your browser’s memory. Scanning does not save a report or upload a sharing image. We store an aggregate summary and PNG only when you choose to create a public link. We do not record commit data in application logs or include third-party tracking scripts. Reloading starts a new analysis. Only your light/dark preference is saved in local browser storage. GitHub and our hosting provider still process requests to operate their services.</p>
         </section>
 
         <section id="sharing" aria-labelledby="sharing-heading">
           <h2 id="sharing-heading">Sharing</h2>
           <p>Images are generated in your browser. You can preview, copy, or download one without uploading it. If private repositories contributed, their counts are included in the aggregate totals, but their names are left out.</p>
-          <p>A result link contains only the displayed aggregate summary in its URL fragment, the part after <code>#</code>. That fragment is not sent to our server. Anyone with the full link can view and reshare those totals, including private contributions. Keep the link private if you want the totals to stay private.</p>
-          <p>A result link preserves the numbers you chose to share. Opening it does not fetch GitHub again, and its contents can be edited. AI Diff does not independently verify shared summaries. Social link previews describe AI Diff; opening the full link displays the result.</p>
+          <p><strong>Create public link</strong> stores your aggregate summary and the exact preview image so the short link can show your result on social platforms. Publishing a real result requires GitHub sign-in with the same handle. Sharing private totals requires explicit consent; repository names, source code, and raw commits are left out.</p>
+          <p>Anyone with a public link can view and reshare it. Published snapshots do not expire automatically, and social platforms may keep cached copies. Disconnecting GitHub does not remove a published result. Opening a result does not fetch GitHub again, and shared numbers and image claims are not independently verified.</p>
+          <p>Older long links still work: their aggregate summary follows <code>#</code> in the URL and is not sent to our server. They use AI Diff’s generic social preview until you choose to create a public link. Downloads and long links remain available if public-link publishing reaches the free limits.</p>
         </section>
       </article>
 

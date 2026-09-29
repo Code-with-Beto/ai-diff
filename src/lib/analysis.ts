@@ -2,7 +2,8 @@ import type { AnalysisResult, CommitFilterSummary, CommitRecord, MonthTotal, Rep
 
 const emptyTotals = (): Totals => ({ additions: 0, deletions: 0, commits: 0 });
 const integer = (value: number) => Number.isSafeInteger(value) && value >= 0;
-export const OVERSIZED_COMMIT_THRESHOLD = 100_000;
+import { isDateOnly, OVERSIZED_COMMIT_THRESHOLD } from '../../shared/analysis-rules.ts';
+export { isDateOnly, OVERSIZED_COMMIT_THRESHOLD } from '../../shared/analysis-rules.ts';
 export interface CommitFilterOptions { enabled?: boolean; scope?: 'both' | 'before' }
 
 function addCommit(totals: Totals, commit: CommitRecord): void {
@@ -14,11 +15,6 @@ function addCommit(totals: Totals, commit: CommitRecord): void {
   }
 }
 
-export function isDateOnly(value: string): boolean {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
-  const date = new Date(`${value}T00:00:00.000Z`);
-  return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
-}
 
 export function analyzeCommits(
   commits: CommitRecord[],
