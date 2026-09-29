@@ -32,11 +32,6 @@
 .sd-preview { display: block; width: 100%; height: auto; max-height: min(40dvh, 21rem); object-fit: contain; background: var(--image-bg); }
 .sd-image-loading { aspect-ratio: 2 / 1; max-height: min(40dvh, 21rem); display: flex; align-items: center; justify-content: center; gap: .5rem; padding: 1rem; color: var(--image-muted); font-size: .875rem; line-height: 1.5; }
 .sd-loading-icon { animation: sd-spin 1.25s linear infinite; }
-.sd-consent { display: flex; align-items: flex-start; gap: .625rem; margin-top: .75rem; padding: .75rem; border: 1px solid var(--line); border-radius: .25rem; background: var(--panel-raised); color: var(--text); cursor: pointer; }
-.sd-consent input { width: 1rem; height: 1rem; flex: 0 0 1rem; margin: .125rem 0 0; accent-color: var(--accent); cursor: pointer; }
-.sd-consent > span { flex: 1; min-width: 0; }
-.sd-consent strong { display: block; font-size: .875rem; font-weight: 500; line-height: 1.4; }
-.sd-consent > span > span { display: block; margin-top: .25rem; font-size: .875rem; line-height: 1.5; color: var(--muted); }
 .sd-action-area { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; margin-top: 1rem; }
 .sd-dialog .sd-secondary-action { display: inline-flex; align-items: center; justify-content: center; gap: .5rem; min-width: 3rem; min-height: 2.5rem; padding: .5rem .75rem; border: 1px solid var(--line); border-radius: .25rem; background: transparent; color: var(--text); font-size: .8125rem; font-weight: 400; line-height: 1.4; }
 .sd-dialog .sd-secondary-action:hover:not(:disabled) { background: var(--line); color: var(--text); }
@@ -66,5 +61,8 @@
 }
 @media (prefers-reduced-motion: reduce) { .sd-loading-icon { animation: none; } }
 
-.sd-dialog .sd-link-action { margin-left: auto; padding: .5rem 0 .5rem .25rem; min-height: 2.5rem; color: var(--text); font-size: .8125rem; font-weight: 400; text-decoration: underline; text-underline-offset: 3px; }
+.sd-dialog .sd-link-action { padding: .5rem 0 .5rem .25rem; min-height: 2.5rem; color: var(--text); font-size: .8125rem; font-weight: 400; text-decoration: underline; text-underline-offset: 3px; }
 .sd-dialog .sd-fallback-copy { margin-top: .5rem; padding: .375rem 0; color: var(--muted); font-size: .75rem; text-decoration: underline; text-underline-offset: 3px; }
+
+.sd-dialog .sd-create-link { margin-left: auto; }
+.sd-dialog .sd-open-x { display: inline-block; margin-top: .75rem; color: var(--text); font-size: .875rem; text-decoration: underline; text-underline-offset: 3px; }

@@ -49,7 +49,7 @@ Run `npm run test:git` when changing counting logic. It checks the calculation a
 
 See the [backend guide](README-backend.md) for configuration, API contracts, [deployment](README-backend.md#deploying-your-own-instance), and [privacy details](README-backend.md#privacy-and-sharing).
 
-GitHub access is read-only. File inspection receives GitHub responses that may contain diff context; the Worker discards patches and returns only file metadata and line counts. Analysis stays in browser memory, and images are generated locally. **Create public link** stores only the aggregate summary and exact preview PNG. Anyone with the link can see them; sharing private totals requires explicit consent. File paths, repository names, and raw commits are left out. Downloads and long result links remain available if publishing reaches the free limits.
+GitHub access is read-only. File inspection receives GitHub responses that may contain diff context; the Worker discards patches and returns only file metadata and line counts. Analysis stays in browser memory, and images are generated locally. **Create link** and **Post on X** store only the aggregate summary and exact preview PNG. Anyone with the link can see them, including any private totals in the result. Post on X opens a prefilled caption and short link in X’s composer; you review and publish there. File paths, repository names, and raw commits are left out. Downloads and long result links remain available if publishing reaches the free limits.
 
 ## Contributing
 
