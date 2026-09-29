@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createShareResult, createShareText, createShareUrl, decodeShare, describeAdditionChange, encodeShare, MAX_SHARE_PAYLOAD_LENGTH, renderShareImage } from '../src/lib/share.ts';
+import type { ShareImageTheme } from '../src/lib/share.ts';
 import { analyzeCommits } from '../src/lib/analysis.ts';
 import type { ShareResult } from '../shared/types.ts';
 
@@ -11,7 +12,7 @@ const fixture: ShareResult = {
 };
 const raw = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url');
 
-async function recordImage(snapshot: ShareResult) {
+async function recordImage(snapshot: ShareResult, theme?: ShareImageTheme) {
   const labels: { value: string; x: number; y: number; size: number; weight: number; width: number; color: string }[] = [];
   const rectangles: { x: number; y: number; width: number; height: number; color: string }[] = [];
   const context = {
@@ -22,7 +23,7 @@ async function recordImage(snapshot: ShareResult) {
   };
   const canvas = { width: 0, height: 0, getContext: () => context, toBlob: (callback: (value: Blob) => void) => callback(new Blob(['image'], { type: 'image/png' })) };
   vi.stubGlobal('document', { fonts: { ready: Promise.resolve() }, createElement: () => canvas });
-  try { const blob = await renderShareImage(snapshot); return { labels, rectangles, width: canvas.width, height: canvas.height, blob }; }
+  try { const blob = await renderShareImage(snapshot, theme); return { labels, rectangles, width: canvas.width, height: canvas.height, blob }; }
   finally { vi.unstubAllGlobals(); }
 }
 
@@ -152,6 +153,8 @@ describe('share image comparison', () => {
     }
     expect(numbers[0].x + numbers[0].width).toBeLessThan(600);
     expect(numbers[1].x).toBeGreaterThan(600);
+    expect(numbers[0].x + numbers[0].width / 2).toBe(308);
+    expect(numbers[1].x + numbers[1].width / 2).toBe(892);
     expect(image.labels.some(label => label.color === '#38bdf8')).toBe(false);
     const unequalDigits = await recordImage({ ...fixture, before: { ...fixture.before, additions: 1_000_000 }, after: { ...fixture.after, additions: 50 } });
     const longNumber = unequalDigits.labels.find(label => label.value === '1,000,000');
@@ -159,15 +162,18 @@ describe('share image comparison', () => {
     expect(longNumber?.size).toBe(shortNumber?.size);
   });
 
-  it.each([[20_000, 60_000], [60_000, 20_000], [20_000, 20_000]])('renders %i before and %i after on exactly the same bar scale', async (before, after) => {
+  it.each([[20_000, 60_000], [60_000, 20_000], [20_000, 20_000]])('partitions one full-width bar for %i before and %i after', async (before, after) => {
     const rendered = await recordImage({ ...fixture, before: { ...fixture.before, additions: before }, after: { ...fixture.after, additions: after } });
     const tracks = rendered.rectangles.filter(rectangle => rectangle.color === '#242424');
     const beforeBar = rendered.rectangles.find(rectangle => rectangle.color === '#bdbdbd');
     const afterBar = rendered.rectangles.find(rectangle => rectangle.color === '#38bdf8');
-    expect(tracks).toHaveLength(2);
-    expect(tracks[0].width).toBe(tracks[1].width);
-    expect(beforeBar?.width).toBeCloseTo(before / Math.max(before, after) * tracks[0].width);
-    expect(afterBar?.width).toBeCloseTo(after / Math.max(before, after) * tracks[0].width);
+    expect(tracks).toHaveLength(1);
+    expect(tracks[0].width).toBe(1088);
+    expect(beforeBar?.width).toBeCloseTo(before / (before + after) * tracks[0].width);
+    expect(afterBar?.width).toBeCloseTo(after / (before + after) * tracks[0].width);
+    expect(beforeBar!.width + afterBar!.width).toBe(tracks[0].width);
+    expect(beforeBar?.x).toBe(tracks[0].x);
+    expect(afterBar?.x).toBe(beforeBar!.x + beforeBar!.width);
     expect(beforeBar?.width! / afterBar?.width!).toBeCloseTo(before / after);
     expect(tracks.every(track => track.height === 6)).toBe(true);
     expect(rendered.labels.map(label => label.value)).not.toContain(describeAdditionChange(before, after));
@@ -181,7 +187,43 @@ describe('share image comparison', () => {
     const afterOnly = await recordImage({ ...zero, after: { additions: 50, deletions: 0, commits: 1 }, firstCommitAt: '2025-09-29T12:00:00.000Z' });
     expect(afterOnly.rectangles.some(rectangle => rectangle.color === '#bdbdbd')).toBe(false);
     expect(afterOnly.labels.map(label => label.value)).toContain('50');
-    expect(afterOnly.rectangles.find(rectangle => rectangle.color === '#38bdf8')?.width).toBe(504);
+    expect(afterOnly.rectangles.find(rectangle => rectangle.color === '#38bdf8')?.width).toBe(1088);
+    const beforeOnly = await recordImage({ ...zero, before: { additions: 50, deletions: 0, commits: 1 }, firstCommitAt: '2019-01-01T00:00:00.000Z' });
+    expect(beforeOnly.rectangles.some(rectangle => rectangle.color === '#38bdf8')).toBe(false);
+    expect(beforeOnly.rectangles.find(rectangle => rectangle.color === '#bdbdbd')?.width).toBe(1088);
+  });
+
+  it.each([
+    ['dark', '#0a0a0a', '#f5f5f5', '#bdbdbd', '#38bdf8'],
+    ['light', '#ffffff', '#171717', '#a3a3a3', '#0ea5e9'],
+  ] as const)('uses a neutral %s palette with blue only on the after segment', async (theme, background, foreground, beforeColor, afterColor) => {
+    const image = await recordImage(fixture, theme);
+    expect(image.rectangles[0]).toEqual({ x: 0, y: 0, width: 1200, height: 600, color: background });
+    expect(image.labels.filter(label => label.value === '20,000' || label.value === '60,000').every(label => label.color === foreground)).toBe(true);
+    expect(image.labels.some(label => label.color === afterColor)).toBe(false);
+    expect(image.rectangles.find(rectangle => rectangle.color === beforeColor)?.width).toBe(272);
+    expect(image.rectangles.find(rectangle => rectangle.color === afterColor)?.width).toBe(816);
+  });
+
+  it('keeps actual dates beside the quiet column labels and centers the footer', async () => {
+    const image = await recordImage(fixture);
+    for (const [labelValue, dateValue, right] of [
+      ['Before AI', 'Jan 1, 2019 – Sep 28, 2025', 560],
+      ['After AI', 'Sep 29, 2025 – Sep 29, 2026', 1144],
+    ] as const) {
+      const label = image.labels.find(item => item.value === labelValue)!;
+      const date = image.labels.find(item => item.value === dateValue)!;
+      expect(label.y).toBe(date.y);
+      expect(label.x + label.width + 24).toBeLessThanOrEqual(date.x);
+      expect(date.x + date.width).toBe(right);
+      expect(date.size).toBeLessThanOrEqual(label.size);
+    }
+    const footer = image.labels.find(label => label.value === 'aidiff.cwb.sh · Code with Beto')!;
+    expect(footer.x + footer.width / 2).toBe(600);
+    const labelsTop = image.labels.find(label => label.value === 'Before AI')!.y - 21;
+    const barBottom = image.rectangles.find(rectangle => rectangle.height === 6)!.y + 6;
+    // Comparison sits centrally between the top header and the context line.
+    expect((labelsTop + barBottom) / 2).toBeCloseTo((64 + 466) / 2, -1);
   });
 
   it('keeps one units heading, actual ranges and the necessary disclosures without old detail clutter', async () => {
@@ -227,7 +269,8 @@ describe('share image comparison', () => {
       },
     };
     const unequal: ShareResult = { ...filtered, commitFilter: { ...filtered.commitFilter!, scope: 'before', excludedAfter: { additions: 0, deletions: 0, commits: 0 } } };
-    for (const snapshot of [large, filtered, unequal]) {
+    const futureCutoff: ShareResult = { ...large, cutoff: '2100-12-31', after: { additions: 0, deletions: 0, commits: 0 } };
+    for (const snapshot of [large, filtered, unequal, futureCutoff]) {
       const { labels } = await recordImage(snapshot);
       for (const label of labels) {
         expect(label.x).toBeGreaterThanOrEqual(56);

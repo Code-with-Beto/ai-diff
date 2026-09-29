@@ -164,7 +164,9 @@ export function describeAdditionChange(before: number, after: number): string {
   return `${change} · ${formatted}%`;
 }
 
-export async function renderShareImage(result: ShareResult): Promise<Blob> {
+export type ShareImageTheme = 'light' | 'dark';
+
+export async function renderShareImage(result: ShareResult, theme: ShareImageTheme = 'dark'): Promise<Blob> {
   if (!validShare(result)) throw new Error('This result cannot be rendered.');
   await document.fonts?.ready;
   const canvas = document.createElement('canvas');
@@ -173,19 +175,22 @@ export async function renderShareImage(result: ShareResult): Promise<Blob> {
   const context = canvas.getContext('2d');
   if (!context) throw new Error('Image export is unavailable in this browser.');
   const c = context;
-  const colors = { background: '#0a0a0a', text: '#f5f5f5', before: '#bdbdbd', after: '#38bdf8', muted: '#a3a3a3', track: '#242424' };
+  const colors = theme === 'light'
+    ? { background: '#ffffff', text: '#171717', before: '#a3a3a3', after: '#0ea5e9', muted: '#737373', track: '#e5e5e5' }
+    : { background: '#0a0a0a', text: '#f5f5f5', before: '#bdbdbd', after: '#38bdf8', muted: '#a3a3a3', track: '#242424' };
   c.fillStyle = colors.background;
   c.fillRect(0, 0, 1200, 600);
 
   const font = (size: number, weight: number) => `${weight} ${size}px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif`;
-  const text = (value: string, x: number, y: number, size: number, color: string, weight = 400, maxWidth = 1088, minimumSize = 14) => {
+  const text = (value: string, x: number, y: number, size: number, color: string, weight = 400, maxWidth = 1088, minimumSize = 14, align: 'left' | 'center' | 'right' = 'left') => {
     c.fillStyle = color;
     c.font = font(size, weight);
     while (c.measureText(value).width > maxWidth && size > minimumSize) {
       size -= 1;
       c.font = font(size, weight);
     }
-    c.fillText(value, x, y);
+    const width = c.measureText(value).width;
+    c.fillText(value, x - (align === 'center' ? width / 2 : align === 'right' ? width : 0), y);
   };
   const wrappedContext = (value: string) => {
     const words = value.split(' ');
@@ -200,28 +205,28 @@ export async function renderShareImage(result: ShareResult): Promise<Blob> {
       } else line = next;
     }
     if (line) lines.push(line);
-    lines.forEach((value, index) => text(value, 56, 466 + index * 22, 16, colors.muted));
+    lines.forEach((value, index) => text(value, 600, 466 + index * 22, 16, colors.muted, 400, 1088, 14, 'center'));
   };
 
   text(`@${result.login}${result.sample ? ' · Sample data' : ''}`, 56, 64, 22, colors.muted, 500, 800);
-  text('Lines added', 960, 64, 22, colors.muted, 500, 184);
+  text('Lines added', 1144, 64, 22, colors.muted, 500, 184, 14, 'right');
 
   const cutoffTime = Date.parse(`${result.cutoff}T00:00:00.000Z`);
   const beforeEnd = new Date(Math.min(cutoffTime - 1, Date.parse(result.asOf))).toISOString();
-  const maximum = Math.max(result.before.additions, result.after.additions);
-  const barWidth = 504;
+  const total = result.before.additions + result.after.additions;
+  const columnWidth = 504;
   let numberSize = 108;
   c.font = font(numberSize, 750);
-  while (Math.max(...[result.before.additions, result.after.additions].map(value => c.measureText(formatNumber(value)).width)) > barWidth && numberSize > 28) {
+  while (Math.max(...[result.before.additions, result.after.additions].map(value => c.measureText(formatNumber(value)).width)) > columnWidth && numberSize > 28) {
     numberSize -= 1;
     c.font = font(numberSize, 750);
   }
   for (const [index, period] of (['before', 'after'] as const).entries()) {
-    // Matching column widths and one bar scale keep the comparison symmetric.
+    // Equal columns and matching type sizes give both totals equal prominence.
     const x = 56 + index * 584;
     const additions = result[period].additions;
-    text(period === 'before' ? 'Before AI' : 'After AI', x, 185, 24, colors.muted, 500, barWidth);
-    text(formatNumber(additions), x, 308, numberSize, colors.text, 750, barWidth, 28);
+    text(period === 'before' ? 'Before AI' : 'After AI', x, 185, 20, colors.muted, 500, 140);
+    text(formatNumber(additions), x + columnWidth / 2, 308, numberSize, colors.text, 750, columnWidth, 28, 'center');
     const range = period === 'before'
       ? result.before.commits > 0 && result.firstCommitAt
         ? `${formatDate(result.firstCommitAt)} – ${formatDate(beforeEnd)}`
@@ -229,13 +234,22 @@ export async function renderShareImage(result: ShareResult): Promise<Blob> {
       : cutoffTime <= Date.parse(result.asOf)
         ? `${formatDate(result.cutoff)} – ${formatDate(result.asOf)}`
         : 'Cutoff falls after this snapshot';
-    text(range, x, 351, 18, colors.muted, 400, barWidth);
-    c.fillStyle = colors.track;
-    c.fillRect(x, 382, barWidth, 6);
-    // Zero stays zero; tiny values are never inflated.
-    if (maximum > 0 && additions > 0) {
-      c.fillStyle = period === 'after' ? colors.after : colors.before;
-      c.fillRect(x, 382, additions / maximum * barWidth, 6);
+    text(range, x + columnWidth, 185, 18, colors.muted, 400, 340, 14, 'right');
+  }
+
+  const barWidth = 1088;
+  c.fillStyle = colors.track;
+  c.fillRect(56, 364, barWidth, 6);
+  // One continuous bar represents the combined total. Empty periods stay empty.
+  if (total > 0) {
+    const beforeWidth = result.before.additions / total * barWidth;
+    if (result.before.additions > 0) {
+      c.fillStyle = colors.before;
+      c.fillRect(56, 364, beforeWidth, 6);
+    }
+    if (result.after.additions > 0) {
+      c.fillStyle = colors.after;
+      c.fillRect(56 + beforeWidth, 364, barWidth - beforeWidth, 6);
     }
   }
 
@@ -252,7 +266,7 @@ export async function renderShareImage(result: ShareResult): Promise<Blob> {
     }
   }
   wrappedContext(contextParts.join(' · '));
-  text('aidiff.cwb.sh · Code with Beto', 56, 552, 18, colors.muted, 400);
+  text('aidiff.cwb.sh · Code with Beto', 600, 552, 18, colors.muted, 400, 1088, 14, 'center');
   return new Promise((resolve, reject) => canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('Could not create the image.')), 'image/png'));
 }
 

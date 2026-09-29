@@ -19,12 +19,18 @@
 .sd-dialog svg { flex-shrink: 0; }
 .sd-header { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .75rem 1.25rem; background: var(--panel); }
 .sd-header h2 { margin: 0; color: var(--text); font-size: 1rem; line-height: 1.5; font-weight: 600; letter-spacing: 0; }
+.sd-header-actions { display: flex; align-items: center; gap: .5rem; }
+.sd-theme-picker { display: flex; gap: .125rem; padding: .125rem; background: var(--panel-raised); border-radius: .375rem; }
+.sd-theme-picker button { padding: .375rem .625rem; min-height: 2rem; background: transparent; border-radius: .25rem; color: var(--muted); font-size: .75rem; line-height: 1.4; }
+.sd-theme-picker button[aria-pressed='true'] { background: var(--text); color: var(--bg); }
+.sd-theme-picker button:hover:not(:disabled):not([aria-pressed='true']) { color: var(--text); }
 .sd-close { display: grid; place-items: center; width: 2.75rem; height: 2.75rem; margin: 0 -.5rem 0 0; padding: 0; flex-shrink: 0; border: 0; border-radius: .25rem; background: transparent; color: var(--muted); cursor: pointer; }
 .sd-close:hover { background: var(--panel-raised); color: var(--text); }
 .sd-body { padding: 0 1.25rem 1rem; }
-.sd-preview-frame { margin: 0; overflow: hidden; border: 1px solid var(--line); border-radius: .25rem; background: #0a0a0a; }
-.sd-preview { display: block; width: 100%; height: auto; max-height: min(40dvh, 21rem); object-fit: contain; background: #0a0a0a; }
-.sd-image-loading { aspect-ratio: 2 / 1; max-height: min(40dvh, 21rem); display: flex; align-items: center; justify-content: center; gap: .5rem; padding: 1rem; color: #a3a3a3; font-size: .875rem; line-height: 1.5; }
+.sd-preview-frame { --image-bg: #0a0a0a; --image-muted: #a3a3a3; margin: 0; overflow: hidden; border: 1px solid var(--line); border-radius: .25rem; background: var(--image-bg); }
+.sd-preview-frame[data-image-theme='light'] { --image-bg: #fff; --image-muted: #666; }
+.sd-preview { display: block; width: 100%; height: auto; max-height: min(40dvh, 21rem); object-fit: contain; background: var(--image-bg); }
+.sd-image-loading { aspect-ratio: 2 / 1; max-height: min(40dvh, 21rem); display: flex; align-items: center; justify-content: center; gap: .5rem; padding: 1rem; color: var(--image-muted); font-size: .875rem; line-height: 1.5; }
 .sd-loading-icon { animation: sd-spin 1.25s linear infinite; }
 .sd-consent { display: flex; align-items: flex-start; gap: .625rem; margin-top: .75rem; padding: .75rem; border: 1px solid var(--line); border-radius: .25rem; background: var(--panel-raised); color: var(--text); cursor: pointer; }
 .sd-consent input { width: 1rem; height: 1rem; flex: 0 0 1rem; margin: .125rem 0 0; accent-color: var(--accent); cursor: pointer; }

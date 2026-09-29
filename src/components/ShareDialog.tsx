@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Check, Copy, LoaderCircle, X } from 'lucide-react';
 import type { ShareResult } from '../../shared/types';
-import { copyShareImage, createShareText, createShareUrl, downloadShareImage, renderShareImage } from '../lib/share';
+import { copyShareImage, createShareText, createShareUrl, downloadShareImage, renderShareImage, type ShareImageTheme } from '../lib/share';
+import { getTheme } from '../lib/theme';
 import './ShareDialog.css';
 
 export default function ShareDialog({ result, close }: { result: ShareResult; close: () => void }) {
@@ -9,29 +10,45 @@ export default function ShareDialog({ result, close }: { result: ShareResult; cl
   const generation = useRef(0);
   const [blob, setBlob] = useState<Blob | null>(null), [url, setUrl] = useState(''), [notice, setNotice] = useState(''), [error, setError] = useState('');
   const [copying, setCopying] = useState(false);
+  const [imageTheme, setImageTheme] = useState<ShareImageTheme>(getTheme);
   const needsConsent = result.includesPrivate && !result.sample;
   const [consent, setConsent] = useState(!needsConsent);
   const shareUrl = createShareUrl(result);
   const shareText = createShareText(result);
 
   useEffect(() => {
-    const run = ++generation.current;
     const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const element = dialog.current;
     if (element && !element.open) element.showModal();
+    return () => {
+      element?.close();
+      if (previousFocus?.isConnected) previousFocus.focus();
+    };
+  }, []);
+
+  useEffect(() => { setConsent(!needsConsent); }, [result, needsConsent]);
+
+  useEffect(() => {
+    const run = ++generation.current;
     let imageUrl = '';
-    setBlob(null); setUrl(''); setNotice(''); setError(''); setCopying(false); setConsent(!needsConsent);
-    renderShareImage(result).then(value => {
+    setBlob(null); setUrl(''); setNotice(''); setError(''); setCopying(false);
+    renderShareImage(result, imageTheme).then(value => {
       if (generation.current !== run) return;
       setBlob(value); imageUrl = URL.createObjectURL(value); setUrl(imageUrl);
     }).catch(() => { if (generation.current === run) setError('The image could not be created. Close this panel and try again.'); });
     return () => {
       generation.current += 1;
       if (imageUrl) URL.revokeObjectURL(imageUrl);
-      element?.close();
-      if (previousFocus?.isConnected) previousFocus.focus();
     };
-  }, [result, needsConsent]);
+  }, [result, imageTheme]);
+
+  function changeImageTheme(theme: ShareImageTheme) {
+    if (theme === imageTheme || copying) return;
+    // Disable export immediately, before a previous render or copy can finish.
+    generation.current += 1;
+    setBlob(null); setUrl(''); setNotice(''); setError('');
+    setImageTheme(theme);
+  }
 
   const copyImage = useCallback(async () => {
     if (!consent) { setError('Confirm that you’re comfortable sharing private totals first.'); return; }
@@ -89,13 +106,19 @@ export default function ShareDialog({ result, close }: { result: ShareResult; cl
   >
     <header className="sd-header">
       <h2 id="share-title">Share result</h2>
-      <button className="sd-close" onClick={close} aria-label="Close sharing" title="Close (Esc)"><X size={20} /></button>
+      <div className="sd-header-actions">
+        <div className="sd-theme-picker" role="group" aria-label="Image theme">
+          <button type="button" aria-pressed={imageTheme === 'light'} disabled={copying} onClick={() => changeImageTheme('light')}>Light</button>
+          <button type="button" aria-pressed={imageTheme === 'dark'} disabled={copying} onClick={() => changeImageTheme('dark')}>Dark</button>
+        </div>
+        <button className="sd-close" onClick={close} aria-label="Close sharing" title="Close (Esc)"><X size={20} /></button>
+      </div>
     </header>
 
     <div className="sd-body">
-      <figure className="sd-preview-frame">
+      <figure className="sd-preview-frame" data-image-theme={imageTheme}>
         {url
-          ? <img className="sd-preview" src={url} alt="Preview of your AI Diff result image" />
+          ? <img className="sd-preview" src={url} alt={`${imageTheme === 'light' ? 'Light' : 'Dark'} preview of your AI Diff result. The blue segment shows the share of counted additions after your comparison date.`} />
           : <div className="sd-image-loading" role="status">
               {!error && <LoaderCircle size={24} className="sd-loading-icon" aria-hidden="true" />}
               <span>{error ? 'Image unavailable.' : 'Preparing your image…'}</span>
@@ -123,7 +146,7 @@ export default function ShareDialog({ result, close }: { result: ShareResult; cl
       {error && <p className="sd-feedback sd-error" role="alert">{error}</p>}
       {notice && <p className="sd-feedback sd-success" role="status"><Check size={17} aria-hidden="true" /><span>{notice}</span></p>}
 
-      <p className="sd-sharing-note">No code or repository names. Link snapshots stay in the URL.</p>
+      <p className="sd-sharing-note">Blue shows the share of lines added since your comparison date.</p>
 
       {consent && <div className="sd-fallbacks">
         <details className="sd-details">

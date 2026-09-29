@@ -72,6 +72,8 @@ Analysis stays in browser memory, so reloading starts a new scan. Only the light
 
 Share images are generated locally. Result links contain an aggregate summary in the URL fragment, after `#`, which is not sent to the server. Private repository names and raw commits are omitted. Sharing totals that include private contributions requires explicit acknowledgment.
 
+The 1200 × 600 PNG supports light and dark export themes, initially matching the interface. Changing the export theme does not change the website theme or private-sharing consent. One continuous line shows the before/after portions of the combined counted additions; its blue segment is the portion on or after the comparison date. Both-zero totals leave a neutral line.
+
 A result link preserves the numbers chosen at the time of sharing; opening it does not fetch GitHub again. Anyone with the full link can read, edit, or reshare the summary. AI Diff does not independently verify those shared numbers. Social previews describe the app; opening the full link displays the result.
 
 ## Development reference
