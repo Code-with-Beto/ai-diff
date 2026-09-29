@@ -71,70 +71,70 @@ kbd { font: 12px/1.4 var(--mono); color: var(--muted); white-space: nowrap; }
 .site-header nav { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 14px; }
 .site-header nav > a { padding: 12px; }
 .site-header nav > .github-link { padding: 8px; text-decoration: none; }
-.user-button { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 8px; border-radius: 6px; background: transparent; color: var(--muted); font-size: 12px; }
-.user-button:hover { color: var(--text); background: var(--panel-raised); }
-.user-button span { max-width: 144px; overflow: hidden; text-overflow: ellipsis; }
-.intro { padding: 40px 0 56px; }
+.intro { padding: 40px 0; }
 .intro h1 { font-size: 36px; font-weight: 500; letter-spacing: -.04em; line-height: 1.2; }
 .intro p { font-size: 16px; line-height: 1.6; color: var(--muted); margin-top: 12px; }
-.workspace { display: grid; grid-template-columns: 248px minmax(0, 1fr); gap: 64px; align-items: start; }
-.result-area { min-width: 0; }
+.workspace { min-width: 0; }
+.result-area { min-width: 0; margin-top: 40px; }
 
-/* Setup groups are separated by space, not nested cards. */
-.setup-panel { padding: 0; }
-.panel-step { margin-bottom: 16px; }
-.panel-step h2 { font-size: 14px; font-weight: 550; line-height: 1.5; }
-.date-step { display: flex; align-items: center; gap: 6px; position: relative; }
-.date-help { display: flex; }
-.date-help-trigger { width: 32px; height: 32px; margin-block: -6px; }
-.date-help-popover { position: absolute; z-index: 5; left: 0; top: calc(100% + 12px); width: min(300px, calc(100vw - 40px)); padding: 16px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); box-shadow: 0 8px 24px #0002; color: var(--muted); font-size: 14px; line-height: 1.6; }
-.date-help-popover p:first-child { color: var(--text); font-weight: 550; }
-.date-help-popover p + p { margin-top: 12px; }
-.connect-button { width: 100%; }
-.permission-note { margin-top: 12px; font-size: 12px; line-height: 1.5; color: var(--muted); }
-.sample-button { display: block; width: 100%; border-radius: 6px; background: var(--panel-raised); min-height: 40px; margin-top: 4px; padding: 12px 16px; color: var(--text); font-size: 14px; }
-.sample-button:hover { background: var(--line); color: var(--text); }
-.setup-notice { margin-top: 12px; font-size: 12px; line-height: 1.7; color: var(--muted); }
-.setting-section { margin-top: 36px; }
+/* Compact setup controls leave the full page width for the results. */
+.analysis-toolbar { position: relative; display: flex; align-items: center; flex-wrap: wrap; gap: 12px; padding-bottom: 24px; border-bottom: 1px solid var(--line); }
+.connection-controls { display: flex; align-items: center; gap: 8px; }
+.connection-controls .button { white-space: nowrap; }
+.explore-sample { background: transparent; white-space: nowrap; }
+.account-filter { --filter-popover-width: 280px; }
+.account-name { max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
+.account-status { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.account-action { margin-top: 16px; width: 100%; }
+.filter-date { position: relative; display: flex; align-items: center; gap: 6px; min-width: 0; }
 .select-wrap { position: relative; display: block; }
-.select-wrap select, .date-label input { display: block; width: 100%; min-height: 44px; padding: 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--text); font-size: 14px; }
+.select-wrap select, .custom-date input { display: block; width: 100%; min-height: 44px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--text); font-size: 14px; }
 .select-wrap select { appearance: none; padding-right: 36px; cursor: pointer; }
 .select-wrap svg { position: absolute; right: 12px; top: 15px; pointer-events: none; color: var(--muted); }
-.date-caption { display: flex; justify-content: space-between; gap: 8px; margin-top: 12px; color: var(--muted); font: 12px/1.5 var(--mono); }
-.date-label { display: block; font-size: 12px; color: var(--muted); margin-top: 12px; }
-.date-label input { margin-top: 8px; }
-.repos-placeholder { font-size: 14px; color: var(--muted); line-height: 1.7; max-width: 28ch; }
-.connected-account { display: flex; align-items: center; gap: 12px; }
-.connected-account > div { min-width: 0; }
-.connected-account strong { display: block; font-size: 14px; font-weight: 500; overflow-wrap: anywhere; }
-.connected-account span { display: flex; align-items: center; gap: 4px; margin-top: 4px; font-size: 12px; color: var(--muted); }
-.sample-account .text-button { margin-top: 12px; }
-.repo-scope-note { color: var(--muted); font-size: 12px; line-height: 1.6; margin-bottom: 20px; }
-.sample-account p { font-size: 14px; line-height: 1.7; color: var(--muted); }
-.repo-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--muted); margin-top: -8px; margin-bottom: 16px; }
-.loading-label { font-size: 12px; }
+.custom-date { min-width: 0; }
+.custom-date input { max-width: 168px; }
+.date-help { display: flex; }
+.date-help-trigger { width: 28px; height: 36px; padding: 6px; }
+.date-help-popover { position: absolute; z-index: 21; left: 0; top: calc(100% + 10px); width: min(320px, calc(100vw - 40px)); padding: 16px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); box-shadow: 0 8px 24px #0002; color: var(--muted); font-size: 14px; line-height: 1.6; }
+.date-help-popover p:first-child { color: var(--text); font-weight: 550; }
+.date-help-popover p + p { margin-top: 12px; }
+.filter-count { color: var(--muted); font: 12px/1.5 var(--mono); }
+.repository-filter { --filter-popover-width: 400px; }
+.line-filters { --filter-popover-width: 320px; }
+.line-filters .commit-filter-control { margin: 20px 0 0; }
+.line-filters .commit-filter-control:first-child { margin-top: 0; }
+.analyze-action { margin-left: auto; white-space: nowrap; }
+.analyze-action kbd { margin-left: 12px; }
+.connection-note { margin-top: 12px; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.connection-note .link-button { min-height: 24px; padding: 0; font-size: inherit; }
+.repo-scope-note { color: var(--muted); font-size: 12px; line-height: 1.6; margin-top: 12px; }
 .search-wrap { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 6px; color: var(--muted); }
 .search-wrap input { width: 100%; min-width: 0; min-height: 28px; background: transparent; border: 0; outline: 0; color: var(--text); font-size: 14px; }
 .search-wrap:focus-within, .add-repository:focus-within { outline: 2px solid var(--text); outline-offset: 3px; }
-.repo-controls { display: flex; justify-content: space-between; margin: 4px 0; }
-.repository-list { max-height: 248px; overflow: auto; scrollbar-width: thin; scrollbar-color: var(--muted) transparent; }
-.repository-option { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 8px 0; font-size: 12px; line-height: 1.5; color: var(--text); cursor: pointer; }
+.repo-controls { display: flex; align-items: center; justify-content: space-between; gap: 4px; margin: 8px 0; }
+.repo-controls .text-button { background: transparent; padding-inline: 4px; }
+.repository-list { max-height: 264px; overflow: auto; scrollbar-width: thin; scrollbar-color: var(--muted) transparent; }
+.repository-option { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 8px 4px; font-size: 13px; line-height: 1.5; color: var(--text); cursor: pointer; border-radius: 4px; }
+.repository-option:hover { background: var(--panel-raised); }
 .repository-option > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .repository-option input, .private-toggle input { width: 16px; height: 16px; margin: 0; flex-shrink: 0; accent-color: var(--accent); }
 .repo-owner, .repository-option svg { color: var(--muted); }
-.repository-option small { display: block; color: var(--muted); font-size: 12px; }
-.add-repository { display: flex; align-items: center; gap: 4px; border: 1px solid var(--line); border-radius: 6px; padding-left: 12px; margin-top: 12px; }
+.repository-option small { margin-left: 6px; color: var(--muted); font-size: 11px; }
+.repository-empty { padding: 20px 4px; }
+.repository-access { border-top: 1px solid var(--line); margin-top: 16px; }
+.repository-access > summary { padding: 16px 0 0; color: var(--muted); font-size: 12px; line-height: 1.5; cursor: pointer; }
+.repository-access > summary:hover { color: var(--text); }
+.add-repository { display: flex; align-items: center; gap: 4px; border: 1px solid var(--line); border-radius: 6px; padding-left: 12px; margin-top: 16px; }
 .add-repository .icon-button { background: var(--panel-raised); color: var(--text); }
 .add-repository input { width: 100%; min-width: 0; border: 0; outline: 0; min-height: 40px; background: transparent; color: var(--text); font-size: 12px; }
 .source-hint, .source-notice { margin-top: 8px; color: var(--muted); font-size: 12px; line-height: 1.6; }
 .source-notice { color: var(--text); }
 .private-toggle { display: flex; align-items: center; gap: 8px; min-height: 44px; margin-top: 12px; color: var(--muted); font-size: 12px; line-height: 1.5; cursor: pointer; }
 .private-toggle span { flex: 1; }
-.private-info { padding: 12px 0 0; }
+.private-info { padding-top: 8px; }
 .private-info p { font-size: 12px; line-height: 1.7; color: var(--muted); }
-.private-info .text-button { display: block; margin-top: 8px; }
-.scan-button { width: 100%; margin-top: 24px; }
-.scan-button kbd { margin-left: auto; }
+.private-info .text-button { margin-top: 8px; }
+
 
 /* The result uses three text levels and a single alignment line. */
 .result-topline { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
@@ -210,15 +210,10 @@ kbd { font: 12px/1.4 var(--mono); color: var(--muted); white-space: nowrap; }
 
 @media (max-width: 1100px) {
   .app-shell { padding: 0 32px; }
-  .workspace { grid-template-columns: 224px minmax(0, 1fr); gap: 40px; }
   .numbers-grid { gap: 24px; }
 }
 @media (max-width: 800px) {
   .intro { padding: 32px 0 40px; }
-  .workspace { grid-template-columns: 1fr; gap: 48px; }
-  .setup-panel { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 32px; }
-  .date-settings { margin-top: 0; }
-  .repo-settings { grid-column: 1 / -1; margin-top: 0; }
   .repository-list { max-height: 192px; }
   .result-summary { padding-top: 32px; }
   .site-footer { margin-top: 48px; }
@@ -228,14 +223,19 @@ kbd { font: 12px/1.4 var(--mono); color: var(--muted); white-space: nowrap; }
   .site-header { min-height: 72px; gap: 16px; }
   .site-header nav { gap: 0; }
   .site-header nav > a { font-size: 12px; padding: 12px 8px; }
-  .user-button span { display: none; }
-  .user-button { width: 40px; justify-content: center; }
   .intro { padding: 24px 0 40px; }
   .intro h1 { font-size: 30px; }
   .intro p { font-size: 14px; max-width: 30ch; }
-  .setup-panel { display: block; }
-  .date-settings, .repo-settings { margin-top: 32px; }
-  .date-label input, .search-wrap input, .add-repository input, .select-wrap select { font-size: 16px; }
+  .analysis-toolbar { gap: 10px; }
+  .filter-date { flex: 1 1 100%; flex-wrap: wrap; }
+  .filter-date .select-wrap { flex: 1; }
+  .filter-date:has(.custom-date) .select-wrap { flex: 1 1 calc(100% - 40px); }
+  .custom-date { flex: 1 1 100%; order: 1; }
+  .custom-date input { max-width: none; }
+  .repository-filter { flex: 1; }
+  .analyze-action { flex: 1 1 100%; margin-left: 0; }
+  .result-area { margin-top: 32px; }
+  .custom-date input, .search-wrap input, .add-repository input, .select-wrap select { font-size: 16px; }
   .result-topline { gap: 12px; align-items: flex-start; }
   .identity h2 { font-size: 14px; }
   .identity > div > span { max-width: 24ch; }

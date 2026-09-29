@@ -1,0 +1,12 @@
+.filter-dropdown { position: relative; min-width: 0; max-width: 100%; }
+.filter-trigger { display: flex; align-items: center; justify-content: space-between; gap: 16px; width: 100%; min-height: 44px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--text); font-size: 14px; line-height: 1.5; text-align: left; }
+.filter-trigger:hover:not(:disabled), .filter-trigger[aria-expanded='true'] { background: var(--panel-raised); }
+.filter-trigger-label { display: flex; align-items: center; gap: 8px; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.filter-trigger-chevron { margin-left: auto; color: var(--muted); }
+.filter-trigger[aria-expanded='true'] .filter-trigger-chevron { transform: rotate(180deg); }
+.filter-popover { position: absolute; z-index: 20; top: calc(100% + 10px); left: var(--filter-popover-offset, 0px); width: min(var(--filter-popover-width, 380px), calc(100vw - 48px)); max-height: min(560px, var(--filter-popover-height, calc(100dvh - 180px))); overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--muted) transparent; padding: 20px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); box-shadow: 0 12px 36px #0002; }
+
+@media (max-width: 700px) {
+  .filter-dropdown { position: static; }
+  .filter-popover { position: fixed; top: var(--filter-popover-top, 16px); left: 20px; right: 20px; width: auto; max-width: none; padding: 16px; }
+}
