@@ -31,6 +31,22 @@ Results cover **selected GitHub repository history**, not your entire career. De
 
 The default date is [November 24, 2025, the Opus 4.5 release](https://www.anthropic.com/news/claude-opus-4-5), inspired by [DHH’s conversation with Lex Fridman](https://lexfridman.com/?p=6512). The [Sonnet 4.5 release on September 29, 2025](https://www.anthropic.com/news/claude-sonnet-4-5) is another preset. Neither date implies that you used AI. Read more on the [About page](https://aidiff.cwb.sh/about).
 
+## Keyboard shortcuts and themes
+
+AI Diff uses your system theme by default. The header toggle or **T** switches between light and dark mode and remembers your choice on this device. The interface and exported images use only black, white, and gray.
+
+| Shortcut | Action |
+| --- | --- |
+| `?` | Show shortcuts |
+| `T` | Toggle light/dark mode |
+| `/` | Focus repository search |
+| `⌘/Ctrl + Enter` | Analyze selected repositories |
+| `⌘/Ctrl + Shift + S` | Open sharing |
+| `⌘/Ctrl + Shift + C` | Copy the image while sharing |
+| `Esc` | Close a dialog |
+
+Single-key shortcuts are inactive while typing. In Keyboard shortcuts, uncheck **Enable single-key shortcuts** to disable T, /, and ? for the current page session; this setting is not saved. Modifier shortcuts remain enabled, and analysis and sharing shortcuts apply when those actions are available.
+
 ## Run locally
 
 Use **Node.js 24 LTS** and npm:
@@ -109,7 +125,7 @@ GitHub tokens are encrypted in expiring HttpOnly session cookies and never expos
 
 Private access is optional and limited by both the repositories granted to the GitHub App and your GitHub permissions. GitHub’s Contents permission technically permits reading source code; AI Diff requests commit metadata and line counts, not source files or patches. No code is sent to an AI model.
 
-Analysis stays in browser memory, so reloading starts a new scan. There are no third-party tracking scripts or stored server-side reports. GitHub and the hosting provider still process requests as part of operating their services.
+Analysis stays in browser memory, so reloading starts a new scan. Only the light/dark preference is saved in local browser storage. There are no third-party tracking scripts or stored server-side reports. GitHub and the hosting provider still process requests as part of operating their services.
 
 Share images are generated locally. Result links carry only an aggregate summary in the URL fragment, the part after `#`, which is not sent to the server. Anyone holding the full link can view, modify, or reshare those totals, so shared results are labeled unverified. Private repository names are omitted, and sharing totals that include private contributions requires an explicit acknowledgment. Social previews describe AI Diff; opening the full link displays the result.
 

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Check, ChevronDown, Copy, Download, Link2, LoaderCircle, LockKeyhole, ShieldCheck, Type, X } from 'lucide-react';
+import { Check, Copy, LoaderCircle, X } from 'lucide-react';
 import type { ShareResult } from '../../shared/types';
 import { copyShareImage, createShareText, createShareUrl, downloadShareImage, renderShareImage } from '../lib/share';
 import './ShareDialog.css';
@@ -86,23 +86,14 @@ export default function ShareDialog({ result, close }: { result: ShareResult; cl
     onCancel={event => { event.preventDefault(); close(); }}
     onClick={event => { if (event.target === event.currentTarget) close(); }}
     aria-labelledby="share-title"
-    aria-describedby="share-description"
   >
     <header className="sd-header">
-      <div>
-        <span className="sd-eyebrow">AI DIFF / SHARE</span>
-        <h2 id="share-title">Share your result.</h2>
-        <p id="share-description">Your numbers, ready to post.</p>
-      </div>
+      <h2 id="share-title">Share result</h2>
       <button className="sd-close" onClick={close} aria-label="Close sharing" title="Close (Esc)"><X size={20} /></button>
     </header>
 
     <div className="sd-body">
       <figure className="sd-preview-frame">
-        <figcaption className="sd-preview-heading">
-          <span>YOUR RESULT IMAGE</span>
-          <span>{result.sample ? 'SAMPLE DATA' : '1200 × 630 PNG'}</span>
-        </figcaption>
         {url
           ? <img className="sd-preview" src={url} alt="Preview of your AI Diff result image" />
           : <div className="sd-image-loading" role="status">
@@ -114,39 +105,34 @@ export default function ShareDialog({ result, close }: { result: ShareResult; cl
       {needsConsent && <label className={`sd-consent${consent ? ' sd-consent-checked' : ''}`}>
         <input type="checkbox" checked={consent} onChange={event => { setConsent(event.target.checked); setError(''); setNotice(''); }} />
         <span><strong>Share private totals</strong><span>I’m comfortable sharing these numbers. Repository names and code are not included.</span></span>
-        <LockKeyhole size={17} aria-hidden="true" />
       </label>}
 
       <div className="sd-action-area">
         <div className="sd-primary-row">
           <button className="button primary sd-copy-image" disabled={!blob || !consent || copying} onClick={() => void copyImage()} aria-keyshortcuts="Meta+Shift+C Control+Shift+C">
-            <Copy size={18} /><span>{copying ? 'Copying…' : 'Copy image'}</span>
+            <Copy size={16} /><span>{copying ? 'Copying…' : 'Copy image'}</span><kbd>⌘/Ctrl ⇧ C</kbd>
           </button>
-          <div className="sd-shortcut"><span>Paste straight into your post</span><kbd>⌘ / Ctrl + Shift + C</kbd></div>
         </div>
         <div className="sd-secondary-actions" role="group" aria-label="More ways to share">
-          <button className="button secondary sd-secondary-action" disabled={!blob || !consent} onClick={() => { if (blob && consent) { downloadShareImage(blob); setNotice('PNG downloaded.'); } }}><Download size={17} /><span>Download PNG</span></button>
-          <button className="button secondary sd-secondary-action" disabled={!consent} onClick={() => void copyText()}><Type size={17} /><span>Copy text</span></button>
-          <button className="button secondary sd-secondary-action" disabled={!consent} onClick={() => void copyLink()}><Link2 size={17} /><span>Copy result link</span></button>
+          <button className="button secondary sd-secondary-action" aria-label="Download PNG" disabled={!blob || !consent} onClick={() => { if (blob && consent) { downloadShareImage(blob); setNotice('PNG downloaded.'); } }}>PNG</button>
+          <button className="button secondary sd-secondary-action" aria-label="Copy text" disabled={!consent} onClick={() => void copyText()}>Text</button>
+          <button className="button secondary sd-secondary-action" aria-label="Copy result link" disabled={!consent} onClick={() => void copyLink()}>Link</button>
         </div>
       </div>
 
       {error && <p className="sd-feedback sd-error" role="alert">{error}</p>}
       {notice && <p className="sd-feedback sd-success" role="status"><Check size={17} aria-hidden="true" /><span>{notice}</span></p>}
 
-      <div className="sd-sharing-notes">
-        <ShieldCheck size={17} aria-hidden="true" />
-        <div><p>Only your handle, totals, dates, and coverage are shared.</p><p>The link holds your snapshot without uploading it. Attach the image for a personalized social preview.</p></div>
-      </div>
+      <p className="sd-sharing-note">No code or repository names. Link snapshots stay in the URL.</p>
 
       {consent && <div className="sd-fallbacks">
         <details className="sd-details">
-          <summary><span><Link2 size={15} aria-hidden="true" />Result link</span><ChevronDown size={16} aria-hidden="true" /></summary>
-          <div className="sd-details-content"><label htmlFor="sd-result-link">Select and copy the link</label><input id="sd-result-link" aria-label="Result link" className="sd-copy-field" readOnly value={shareUrl} onFocus={event => event.target.select()} /></div>
+          <summary>Result link</summary>
+          <div className="sd-details-content"><p className="sd-field-note">Share the PNG for a personalized social preview.</p><input id="sd-result-link" aria-label="Result link" className="sd-copy-field" readOnly value={shareUrl} onFocus={event => event.target.select()} /></div>
         </details>
         <details className="sd-details">
-          <summary><span><Type size={15} aria-hidden="true" />Share text</span><ChevronDown size={16} aria-hidden="true" /></summary>
-          <div className="sd-details-content"><label htmlFor="sd-share-text">Select and copy the text</label><textarea id="sd-share-text" aria-label="Share text" className="sd-copy-field sd-text-field" rows={8} readOnly value={shareText} onFocus={event => event.target.select()} /></div>
+          <summary>Share text</summary>
+          <div className="sd-details-content"><textarea id="sd-share-text" aria-label="Share text" className="sd-copy-field sd-text-field" rows={8} readOnly value={shareText} onFocus={event => event.target.select()} /></div>
         </details>
       </div>}
     </div>

@@ -120,10 +120,8 @@ export async function renderShareImage(result: ShareResult): Promise<Blob> {
   const context = canvas.getContext('2d');
   if (!context) throw new Error('Image export is unavailable in this browser.');
   const c = context;
-  c.fillStyle = '#0b0d0c';
+  c.fillStyle = '#0a0a0a';
   c.fillRect(0, 0, 1200, 630);
-  c.fillStyle = '#c6f582';
-  c.fillRect(56, 51, 6, 27);
   const text = (value: string, x: number, y: number, size: number, color: string, weight = 400, maxWidth?: number) => {
     c.fillStyle = color;
     c.font = `${weight} ${size}px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif`;
@@ -135,37 +133,37 @@ export async function renderShareImage(result: ShareResult): Promise<Blob> {
     }
     c.fillText(value, x, y);
   };
-  text('AI DIFF', 77, 73, 25, '#f3f5ef', 700);
-  text(result.sample ? 'SAMPLE DATA' : 'SHARED SNAPSHOT', 894, 73, 17, '#c6f582', 650);
-  text(`@${result.login}`, 56, 145, 49, '#f3f5ef', 650, 1088);
-  text('My GitHub, before and after AI.', 57, 186, 27, '#a0a79f');
+  text('AI DIFF', 56, 73, 25, '#f5f5f5', 700);
+  text(result.sample ? 'SAMPLE DATA' : 'SHARED SNAPSHOT', 894, 73, 17, '#f5f5f5', 650);
+  text(`@${result.login}`, 56, 145, 49, '#f5f5f5', 650, 1088);
+  text('My GitHub, before and after AI.', 57, 186, 27, '#a3a3a3');
 
   for (const [index, period] of (['before', 'after'] as const).entries()) {
     const x = 56 + index * 558;
     const totals = result[period];
-    c.fillStyle = period === 'after' ? '#182113' : '#151816';
+    c.fillStyle = '#151515';
     c.beginPath();
-    c.roundRect(x, 222, 530, 238, 16);
+    c.roundRect(x, 222, 530, 238, 8);
     c.fill();
-    text(period === 'before' ? 'BEFORE' : 'AFTER', x + 27, 261, 16, period === 'after' ? '#c6f582' : '#a0a79f', 650);
-    text(formatNumber(totals.additions), x + 25, 337, 62, period === 'after' ? '#c6f582' : '#f3f5ef', 650, 478);
-    text('lines added', x + 28, 371, 21, '#a0a79f');
-    text(`${formatNumber(totals.commits)} commits · ${formatNumber(totals.deletions)} deleted`, x + 28, 407, 18, '#d3d8cf', 400, 474);
+    text(period === 'before' ? 'BEFORE' : 'AFTER', x + 27, 261, 16, period === 'after' ? '#f5f5f5' : '#a3a3a3', 650);
+    text(formatNumber(totals.additions), x + 25, 337, 62, period === 'after' ? '#f5f5f5' : '#bdbdbd', 650, 478);
+    text('lines added', x + 28, 371, 21, '#a3a3a3');
+    text(`${formatNumber(totals.commits)} commits · ${formatNumber(totals.deletions)} deleted`, x + 28, 407, 18, '#d4d4d4', 400, 474);
     const range = period === 'before'
       ? totals.commits > 0 && result.firstCommitAt
         ? `${formatDate(result.firstCommitAt)} – ${formatDate(new Date(Date.parse(`${result.cutoff}T00:00:00.000Z`) - 1).toISOString())}`
         : `Before ${formatDate(result.cutoff)}`
       : `${formatDate(result.cutoff)} – ${formatDate(result.asOf)}`;
-    text(range, x + 28, 438, 16, '#a0a79f', 400, 474);
+    text(range, x + 28, 438, 16, '#a3a3a3', 400, 474);
   }
   const partial = result.coverage.incomplete > 0 || result.coverage.unavailable > 0;
   const coverage = `${result.coverage.completed}/${result.coverage.total} repositories complete${partial ? ' · partial results' : ''}${result.includesPrivate ? ' · includes private' : ''}`;
-  text(coverage, 56, 503, 19, '#a0a79f', 400, 1088);
-  c.fillStyle = '#2a302b';
+  text(coverage, 56, 493, 19, '#a3a3a3', 400, 1088);
+  c.fillStyle = '#303030';
   c.fillRect(56, 531, 1088, 1);
-  text('Git additions, not proof of AI use. Shared numbers are self-reported.', 56, 568, 17, '#929b90', 400, 1088);
-  text(result.sample ? 'Illustrative sample. Not a real account analysis.' : `Snapshot as of ${formatDate(result.asOf)} · Compared using commit dates (UTC)`, 56, 600, 15, '#929b90');
-  text('aidiff.cwb.sh · Code with Beto', 842, 600, 16, '#a0a79f', 400);
+  text('Git additions, not proof of AI use. Shared numbers are self-reported.', 56, 568, 17, '#969696', 400, 1088);
+  text(result.sample ? 'Illustrative sample. Not a real account analysis.' : `Snapshot as of ${formatDate(result.asOf)} · Compared using commit dates (UTC)`, 56, 600, 15, '#969696');
+  text('aidiff.cwb.sh · Code with Beto', 842, 600, 16, '#a3a3a3', 400);
   return new Promise((resolve, reject) => canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('Could not create the image.')), 'image/png'));
 }
 

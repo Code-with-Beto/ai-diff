@@ -1,401 +1,106 @@
 .about-page {
   width: 100%;
-  max-width: 1060px;
+  max-width: 65ch;
   margin: 0 auto;
-  padding: 72px 0 32px;
+  padding: 72px 0 40px;
   color: var(--text);
 }
 
-.about-page .about-hero {
-  max-width: 740px;
-  margin-bottom: 72px;
-}
-
-.about-page .about-eyebrow,
-.about-page .about-section-label {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 0 0 20px;
-  color: var(--muted);
-  font-family: var(--mono);
-  font-size: 11px;
-  font-weight: 500;
-  line-height: 1.5;
-  letter-spacing: .1em;
-}
-
-.about-page .about-hero > .about-eyebrow {
-  color: var(--accent);
+.about-page .about-header {
+  margin-bottom: 56px;
 }
 
 .about-page h1 {
-  margin: 0;
-  font-size: clamp(36px, 4.5vw, 56px);
-  font-weight: 550;
-  line-height: 1.12;
-  letter-spacing: -.045em;
+  margin: 0 0 20px;
+  font-size: 30px;
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: -.025em;
 }
 
-.about-page .about-intro {
-  max-width: 58ch;
-  margin: 24px 0 28px;
+.about-page p {
+  margin: 0 0 20px;
   color: var(--muted);
-  font-size: 18px;
+  font-size: 16px;
   line-height: 1.7;
 }
 
-.about-page .about-primary-link {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 20px;
-  min-height: 44px;
-  padding: 12px 18px;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  background: var(--accent);
-  color: var(--bg);
-  font-size: 14px;
-  font-weight: 650;
-  line-height: 1.4;
-  text-decoration: none;
-  transition: background-color 160ms ease, transform 160ms ease;
-}
-
-.about-page .about-primary-link:hover {
-  background: color-mix(in srgb, var(--accent), white 14%);
-}
-
-.about-page .about-primary-link:active {
-  transform: translateY(1px);
-}
-
-/* A quiet rail keeps navigation distinct from the main reading column. */
-.about-page .about-layout {
-  display: grid;
-  grid-template-columns: 200px minmax(0, 680px);
-  gap: 72px;
-  padding-top: 40px;
-  border-top: 1px solid var(--line);
-}
-
-.about-page .about-sidebar {
-  min-width: 0;
-}
-
-.about-page .about-contents {
-  position: sticky;
-  top: 32px;
-}
-
-.about-page .about-contents > .about-eyebrow {
-  margin-bottom: 16px;
-  font-size: 10px;
-}
-
-.about-page .about-contents ol {
-  display: grid;
-  gap: 2px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.about-page .about-contents li a {
-  display: flex;
-  align-items: baseline;
-  gap: 12px;
-  padding: 10px 0;
-  color: var(--muted);
-  font-size: 13px;
-  line-height: 1.4;
-  text-decoration: none;
-  transition: color 160ms ease;
-}
-
-.about-page .about-contents li a span {
-  color: var(--muted);
-  font-family: var(--mono);
-  font-size: 10px;
-}
-
-.about-page .about-contents li a:hover,
-.about-page .about-source-link:hover {
-  color: var(--text);
-}
-
-.about-page .about-source-link {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 24px;
-  padding: 8px 0;
-  color: var(--muted);
-  font-size: 12px;
-  text-decoration: none;
-  transition: color 160ms ease;
-}
-
-.about-page .about-article {
-  min-width: 0;
-}
-
-.about-page .about-section {
-  margin: 0;
-  padding: 0 0 48px;
-  scroll-margin-top: 32px;
-}
-
-.about-page .about-section + .about-section {
-  padding-top: 40px;
-  border-top: 1px solid var(--line);
-}
-
-.about-page .about-section-label {
-  margin-bottom: 14px;
-  font-size: 10px;
-  letter-spacing: .09em;
-}
-
-.about-page h2 {
-  margin: 0 0 20px;
-  font-size: 28px;
-  font-weight: 550;
-  line-height: 1.25;
-  letter-spacing: -.03em;
-}
-
-.about-page h3 {
-  margin: 0 0 8px;
-  color: var(--text);
-  font-size: 15px;
-  font-weight: 600;
-  line-height: 1.5;
-  letter-spacing: -.01em;
-}
-
-.about-page .about-article p {
-  max-width: 66ch;
-  margin: 0 0 16px;
-  color: var(--muted);
-  font-size: 15px;
-  line-height: 1.8;
-}
-
-.about-page .about-article p:last-child {
+.about-page p:last-child {
   margin-bottom: 0;
 }
 
-.about-page .about-article .about-section-label,
-.about-page .about-brand > .about-eyebrow {
-  margin-bottom: 14px;
-  font-size: 10px;
-  line-height: 1.5;
+.about-page .about-header p {
+  max-width: 54ch;
 }
 
-.about-page .about-article strong {
+.about-page .about-article section {
+  margin: 0;
+  scroll-margin-top: 40px;
+}
+
+.about-page .about-article section + section {
+  margin-top: 48px;
+}
+
+.about-page h2 {
+  margin: 0 0 16px;
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.5;
+  letter-spacing: -.015em;
+}
+
+.about-page strong {
   color: var(--text);
   font-weight: 550;
 }
 
-.about-page .about-article p a {
+.about-page a {
   color: var(--text);
-  text-decoration-line: underline;
-  text-decoration-color: var(--line);
+  text-decoration: underline;
+  text-decoration-color: var(--muted);
   text-decoration-thickness: 1px;
   text-underline-offset: 4px;
-  transition: color 160ms ease, text-decoration-color 160ms ease;
 }
 
-.about-page .about-article p a:hover {
-  color: var(--accent);
+.about-page a:hover {
   text-decoration-color: currentColor;
 }
 
-.about-page .about-note {
-  margin-top: 24px;
-  padding: 4px 0 4px 16px;
-  border-left: 2px solid var(--accent);
-}
-
-.about-page .about-note p {
-  color: var(--text);
-  font-size: 14px;
-}
-
-/* More space between steps than within each step makes the method scan easily. */
-.about-page .about-steps {
-  display: grid;
-  gap: 24px;
-  margin: 24px 0;
-  padding: 0;
-  list-style: none;
-}
-
-.about-page .about-steps li {
-  position: relative;
-  padding-left: 40px;
-}
-
-.about-page .about-step-index {
-  position: absolute;
-  top: 1px;
-  left: 0;
-  display: grid;
-  width: 24px;
-  height: 24px;
-  place-items: center;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  color: var(--muted);
-  font-family: var(--mono);
-  font-size: 11px;
-}
-
-.about-page .about-callout {
-  margin-top: 24px;
-  padding: 20px 24px;
-  border-radius: 10px;
-  background: var(--panel);
-}
-
-.about-page .about-callout p {
-  font-size: 14px;
-  line-height: 1.75;
-}
-
-.about-page .about-subsection + .about-subsection {
-  margin-top: 28px;
+.about-page a:focus-visible {
+  border-radius: 2px;
+  outline: 2px solid var(--text);
+  outline-offset: 4px;
 }
 
 .about-page code {
-  padding: 2px 6px;
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  background: var(--panel);
   color: var(--text);
   font-family: var(--mono);
-  font-size: .85em;
+  font-size: .9em;
 }
 
-.about-page .about-brand {
-  margin-top: 8px;
-  padding: 32px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: linear-gradient(135deg, var(--panel-raised), var(--panel));
+.about-page .about-footer {
+  margin-top: 56px;
+  padding-top: 32px;
+  border-top: 1px solid var(--line);
 }
 
-.about-page .about-brand h2 {
-  max-width: 20ch;
-  font-size: 28px;
-}
-
-.about-page .about-brand-link {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 8px;
-  padding: 8px 0;
-  color: var(--accent);
+.about-page .about-footer p,
+.about-page .about-footer > a {
   font-size: 14px;
-  font-weight: 550;
-  text-decoration: none;
+  line-height: 1.7;
 }
 
-.about-page .about-brand-link:hover {
-  text-decoration: underline;
-  text-underline-offset: 4px;
-}
-
-.about-page a:focus-visible {
-  border-radius: 4px;
-  outline: 2px solid var(--accent);
-  outline-offset: 5px;
-}
-
-@media (max-width: 1000px) {
-  .about-page .about-layout {
-    grid-template-columns: 180px minmax(0, 1fr);
-    gap: 40px;
-  }
-}
-
-@media (max-width: 760px) {
+@media (max-width: 600px) {
   .about-page {
-    padding-top: 48px;
+    padding-top: 40px;
   }
 
-  .about-page .about-hero {
+  .about-page .about-header {
     margin-bottom: 40px;
   }
 
-  .about-page .about-layout {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 40px;
-    padding-top: 24px;
-  }
-
-  .about-page .about-contents {
-    position: static;
-  }
-
-  .about-page .about-contents ol {
-    grid-template-columns: 1fr 1fr;
-    column-gap: 16px;
-  }
-
-  .about-page .about-source-link {
-    margin-top: 12px;
-  }
-
-  .about-page .about-sidebar {
-    padding-bottom: 24px;
-    border-bottom: 1px solid var(--line);
-  }
-
-  .about-page .about-section {
-    padding-bottom: 32px;
-  }
-
-  .about-page .about-section + .about-section {
-    padding-top: 32px;
-  }
-}
-
-@media (max-width: 480px) {
-  .about-page {
-    padding-top: 32px;
-  }
-
-  .about-page h1 {
-    font-size: 36px;
-  }
-
-  .about-page h2,
-  .about-page .about-brand h2 {
-    font-size: 24px;
-  }
-
-  .about-page .about-intro {
-    font-size: 16px;
-    line-height: 1.7;
-  }
-
-  .about-page .about-contents li a {
-    gap: 8px;
-    font-size: 12px;
-  }
-
-  .about-page .about-callout,
-  .about-page .about-brand {
-    padding: 20px;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .about-page a {
-    transition: none;
+  .about-page .about-article section + section {
+    margin-top: 40px;
   }
 }

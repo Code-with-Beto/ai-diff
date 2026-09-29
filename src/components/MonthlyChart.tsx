@@ -48,17 +48,17 @@ export default function MonthlyChart({ months, cutoff }: { months: MonthTotal[];
 
   return <section className="monthly-chart" aria-labelledby={`${id}-heading`}>
     <div className="monthly-chart__header">
-      <div><h3 id={`${id}-heading`}>Your activity over time</h3><p>Lines added, month by month.</p></div>
+      <h3 id={`${id}-heading`}>Lines added per month</h3>
       {activeMonth && <div className="monthly-chart__readout" aria-hidden="true">
-        <span className="monthly-chart__month">{monthLabel(activeMonth.month)}<span className="monthly-chart__selection">{activeIndex === peakIndex ? ' · peak' : ''}</span></span>
-        <strong>{formatNumber(activeMonth.before + activeMonth.after)}<span className="monthly-chart__unit"> lines</span></strong>
+        <span className="monthly-chart__month">{monthLabel(activeMonth.month)}</span>
+        <strong>{formatNumber(activeMonth.before + activeMonth.after)}</strong>
       </div>}
     </div>
 
     {activeMonth ? <>
       <div className="monthly-chart__legend" aria-label="Chart legend">
-        <span><i className="monthly-chart__swatch monthly-chart__swatch--before" aria-hidden="true" />Before AI</span>
-        <span><i className="monthly-chart__swatch monthly-chart__swatch--after" aria-hidden="true" />After AI</span>
+        <span><i className="monthly-chart__swatch monthly-chart__swatch--before" aria-hidden="true" />Before</span>
+        <span><i className="monthly-chart__swatch monthly-chart__swatch--after" aria-hidden="true" />After</span>
         {cutoffPosition !== null && <span className="monthly-chart__cutoff-key"><i aria-hidden="true" />{formatDate(cutoff)}</span>}
       </div>
       <div className="monthly-chart__graph">
@@ -72,7 +72,7 @@ export default function MonthlyChart({ months, cutoff }: { months: MonthTotal[];
           aria-valuemin={1}
           aria-valuemax={months.length}
           aria-valuenow={activeIndex + 1}
-          aria-valuetext={`${monthLabel(activeMonth.month)}: ${formatNumber(activeMonth.before + activeMonth.after)} lines added, ${formatNumber(activeMonth.before)} before AI and ${formatNumber(activeMonth.after)} after AI`}
+          aria-valuetext={`${monthLabel(activeMonth.month)}: ${formatNumber(activeMonth.before + activeMonth.after)} lines added, ${formatNumber(activeMonth.before)} before and ${formatNumber(activeMonth.after)} after the comparison date`}
           aria-describedby={`${id}-instructions ${id}-cutoff`}
           onKeyDown={exploreWithKeyboard}
           onPointerMove={exploreWithPointer}
@@ -100,18 +100,18 @@ export default function MonthlyChart({ months, cutoff }: { months: MonthTotal[];
           {timeline.map(index => <span key={months[index].month} style={{ left: `${months.length > 1 ? index / (months.length - 1) * 100 : 0}%` }}>{monthLabel(months[index].month)}</span>)}
         </div>
       </div>
-      <p className="monthly-chart__hint" id={`${id}-instructions`}>Hover or tap a month to explore. Use arrow keys when focused.</p>
-      <span className="monthly-chart__sr-only" id={`${id}-cutoff`}>Before AI means before {formatDate(cutoff)}. After AI includes that date. The comparison starts at midnight UTC. Use Home or End for the first or last month.</span>
+      <span className="monthly-chart__sr-only" id={`${id}-instructions`}>Hover or tap a month to explore. Use arrow keys when focused. Use Home or End for the first or last month, and Page Up or Page Down to move twelve months.</span>
+      <span className="monthly-chart__sr-only" id={`${id}-cutoff`}>Before means before {formatDate(cutoff)}. After includes that date. The comparison starts at midnight UTC.</span>
       <details className="monthly-chart__details">
-        <summary><span>View monthly values</span><span className="monthly-chart__count">{formatNumber(months.length)} months</span></summary>
+        <summary>Monthly values</summary>
         <div className="monthly-chart__table-scroll" tabIndex={0} role="region" aria-label="Monthly values table">
           <table>
             <caption>Lines added before and after {formatDate(cutoff)} (UTC)</caption>
-            <thead><tr><th scope="col">Month</th><th scope="col">Before AI</th><th scope="col">After AI</th></tr></thead>
+            <thead><tr><th scope="col">Month</th><th scope="col">Before</th><th scope="col">After</th></tr></thead>
             <tbody>{months.map(month => <tr key={month.month}><th scope="row">{monthLabel(month.month)}</th><td>{formatNumber(month.before)}</td><td>{formatNumber(month.after)}</td></tr>)}</tbody>
           </table>
         </div>
       </details>
-    </> : <div className="monthly-chart__empty"><p>No monthly activity to show yet.</p><span>Choose repositories and scan their history to see your timeline.</span></div>}
+    </> : <p className="monthly-chart__empty">No monthly activity to show.</p>}
   </section>;
 }
