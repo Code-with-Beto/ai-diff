@@ -138,7 +138,7 @@ describe('added-line change wording', () => {
 });
 
 describe('share image comparison', () => {
-  it('exports a 2:1 PNG with equally prominent bold neutral totals', async () => {
+  it('exports a 2:1 PNG with equally sized bold totals aligned to the website columns', async () => {
     const image = await recordImage(fixture);
     expect([image.width, image.height]).toEqual([1200, 600]);
     expect(image.width / image.height).toBe(2);
@@ -148,13 +148,15 @@ describe('share image comparison', () => {
     expect(numbers[0].size).toBe(108);
     expect(numbers[1].size).toBe(numbers[0].size);
     for (const label of numbers) {
-      expect(label.weight).toBeGreaterThanOrEqual(700);
-      expect(label.color).toBe('#f5f5f5');
+      expect(label.weight).toBe(700);
+      expect(label.y).toBe(276);
     }
-    expect(numbers[0].x + numbers[0].width).toBeLessThan(600);
-    expect(numbers[1].x).toBeGreaterThan(600);
-    expect(numbers[0].x + numbers[0].width / 2).toBe(308);
-    expect(numbers[1].x + numbers[1].width / 2).toBe(892);
+    expect(numbers[0].color).toBe('#a3a3a3');
+    expect(numbers[1].color).toBe('#ededed');
+    expect(numbers[0].x).toBe(56);
+    expect(numbers[1].x).toBe(640);
+    expect(numbers[0].x + numbers[0].width).toBeLessThanOrEqual(560);
+    expect(numbers[1].x + numbers[1].width).toBeLessThanOrEqual(1144);
     expect(image.labels.some(label => label.color === '#38bdf8')).toBe(false);
     const unequalDigits = await recordImage({ ...fixture, before: { ...fixture.before, additions: 1_000_000 }, after: { ...fixture.after, additions: 50 } });
     const longNumber = unequalDigits.labels.find(label => label.value === '1,000,000');
@@ -165,15 +167,18 @@ describe('share image comparison', () => {
   it.each([[20_000, 60_000], [60_000, 20_000], [20_000, 20_000]])('partitions one full-width bar for %i before and %i after', async (before, after) => {
     const rendered = await recordImage({ ...fixture, before: { ...fixture.before, additions: before }, after: { ...fixture.after, additions: after } });
     const tracks = rendered.rectangles.filter(rectangle => rectangle.color === '#242424');
-    const beforeBar = rendered.rectangles.find(rectangle => rectangle.color === '#bdbdbd');
+    const beforeBar = rendered.rectangles.find(rectangle => rectangle.color === '#a3a3a3');
     const afterBar = rendered.rectangles.find(rectangle => rectangle.color === '#38bdf8');
     expect(tracks).toHaveLength(1);
     expect(tracks[0].width).toBe(1088);
+    expect(tracks[0].y).toBe(412);
     expect(beforeBar?.width).toBeCloseTo(before / (before + after) * tracks[0].width);
     expect(afterBar?.width).toBeCloseTo(after / (before + after) * tracks[0].width);
     expect(beforeBar!.width + afterBar!.width).toBe(tracks[0].width);
     expect(beforeBar?.x).toBe(tracks[0].x);
     expect(afterBar?.x).toBe(beforeBar!.x + beforeBar!.width);
+    expect(beforeBar?.y).toBe(tracks[0].y);
+    expect(afterBar?.y).toBe(tracks[0].y);
     expect(beforeBar?.width! / afterBar?.width!).toBeCloseTo(before / after);
     expect(tracks.every(track => track.height === 6)).toBe(true);
     expect(rendered.labels.map(label => label.value)).not.toContain(describeAdditionChange(before, after));
@@ -182,64 +187,74 @@ describe('share image comparison', () => {
   it('draws no artificial bar for zero totals and handles a missing baseline', async () => {
     const zero = { ...fixture, before: { additions: 0, deletions: 0, commits: 0 }, after: { additions: 0, deletions: 0, commits: 0 }, firstCommitAt: null };
     const empty = await recordImage(zero);
-    expect(empty.rectangles.filter(rectangle => rectangle.color === '#bdbdbd' || rectangle.color === '#38bdf8')).toEqual([]);
+    expect(empty.rectangles.filter(rectangle => rectangle.color === '#a3a3a3' || rectangle.color === '#38bdf8')).toEqual([]);
     expect(empty.labels.filter(label => label.value === '0')).toHaveLength(2);
     const afterOnly = await recordImage({ ...zero, after: { additions: 50, deletions: 0, commits: 1 }, firstCommitAt: '2025-09-29T12:00:00.000Z' });
-    expect(afterOnly.rectangles.some(rectangle => rectangle.color === '#bdbdbd')).toBe(false);
+    expect(afterOnly.rectangles.some(rectangle => rectangle.color === '#a3a3a3')).toBe(false);
     expect(afterOnly.labels.map(label => label.value)).toContain('50');
     expect(afterOnly.rectangles.find(rectangle => rectangle.color === '#38bdf8')?.width).toBe(1088);
     const beforeOnly = await recordImage({ ...zero, before: { additions: 50, deletions: 0, commits: 1 }, firstCommitAt: '2019-01-01T00:00:00.000Z' });
     expect(beforeOnly.rectangles.some(rectangle => rectangle.color === '#38bdf8')).toBe(false);
-    expect(beforeOnly.rectangles.find(rectangle => rectangle.color === '#bdbdbd')?.width).toBe(1088);
+    expect(beforeOnly.rectangles.find(rectangle => rectangle.color === '#a3a3a3')?.width).toBe(1088);
   });
 
   it.each([
-    ['dark', '#0a0a0a', '#f5f5f5', '#bdbdbd', '#38bdf8'],
-    ['light', '#ffffff', '#171717', '#a3a3a3', '#0ea5e9'],
+    ['dark', '#0a0a0a', '#ededed', '#a3a3a3', '#38bdf8'],
+    ['light', '#fafafa', '#171717', '#666', '#0ea5e9'],
   ] as const)('uses a neutral %s palette with blue only on the after segment', async (theme, background, foreground, beforeColor, afterColor) => {
     const image = await recordImage(fixture, theme);
     expect(image.rectangles[0]).toEqual({ x: 0, y: 0, width: 1200, height: 600, color: background });
-    expect(image.labels.filter(label => label.value === '20,000' || label.value === '60,000').every(label => label.color === foreground)).toBe(true);
+    expect(image.labels.find(label => label.value === '20,000')?.color).toBe(beforeColor);
+    expect(image.labels.find(label => label.value === '60,000')?.color).toBe(foreground);
+    expect(image.labels.find(label => label.value === '@octo-dev')).toMatchObject({ x: 56, y: 64, size: 22, weight: 550, color: foreground });
     expect(image.labels.some(label => label.color === afterColor)).toBe(false);
     expect(image.rectangles.find(rectangle => rectangle.color === beforeColor)?.width).toBe(272);
     expect(image.rectangles.find(rectangle => rectangle.color === afterColor)?.width).toBe(816);
   });
 
-  it('keeps actual dates beside the quiet column labels and centers the footer', async () => {
+  it('aligns each label, total, units and actual dates to one left edge and centers the footer', async () => {
     const image = await recordImage(fixture);
-    for (const [labelValue, dateValue, right] of [
-      ['Before AI', 'Jan 1, 2019 – Sep 28, 2025', 560],
-      ['After AI', 'Sep 29, 2025 – Sep 29, 2026', 1144],
+    for (const [labelValue, numberValue, dateValue, left] of [
+      ['Before', '20,000', 'Jan 1, 2019 – Sep 28, 2025', 56],
+      ['After', '60,000', 'Sep 29, 2025 – Sep 29, 2026', 640],
     ] as const) {
       const label = image.labels.find(item => item.value === labelValue)!;
+      const number = image.labels.find(item => item.value === numberValue)!;
+      const units = image.labels.find(item => item.value === 'lines added' && item.x === left)!;
       const date = image.labels.find(item => item.value === dateValue)!;
-      expect(label.y).toBe(date.y);
-      expect(label.x + label.width + 24).toBeLessThanOrEqual(date.x);
-      expect(date.x + date.width).toBe(right);
-      expect(date.size).toBeLessThanOrEqual(label.size);
+      expect(label).toMatchObject({ x: left, y: 162 });
+      expect(number).toMatchObject({ x: left, y: 276 });
+      expect(units).toMatchObject({ x: left, y: 324 });
+      expect(date).toMatchObject({ x: left, y: 364, size: 20 });
+      expect(date.width).toBeLessThanOrEqual(504);
+      expect(date.y - date.size).toBeGreaterThan(units.y + units.size * 0.2);
+      expect(date.y + date.size * 0.2).toBeLessThan(412);
     }
     const footer = image.labels.find(label => label.value === 'aidiff.cwb.sh · Code with Beto')!;
     expect(footer.x + footer.width / 2).toBe(600);
-    const labelsTop = image.labels.find(label => label.value === 'Before AI')!.y - 21;
-    const barBottom = image.rectangles.find(rectangle => rectangle.height === 6)!.y + 6;
-    // Comparison sits centrally between the top header and the context line.
-    expect((labelsTop + barBottom) / 2).toBeCloseTo((64 + 466) / 2, -1);
+    expect(footer.y).toBe(552);
+    const coverage = image.labels.find(label => label.value.includes('3/6 repos complete'))!;
+    expect(coverage.y).toBe(480);
+    expect(coverage.x + coverage.width / 2).toBe(600);
   });
 
-  it('keeps one units heading, actual ranges and the necessary disclosures without old detail clutter', async () => {
+  it('keeps units below both totals, actual ranges and separate sample disclosure without old detail clutter', async () => {
     const { labels } = await recordImage({ ...fixture, sample: true });
     const values = labels.map(label => label.value);
-    expect(values.filter(value => value === 'Lines added')).toHaveLength(1);
-    expect(values).toContain('Before AI');
-    expect(values).toContain('After AI');
+    expect(values.filter(value => value === 'lines added')).toHaveLength(2);
+    expect(values).not.toContain('Lines added');
+    expect(values).toContain('Before');
+    expect(values).toContain('After');
     expect(values).toContain('Jan 1, 2019 – Sep 28, 2025');
     expect(values).toContain('Sep 29, 2025 – Sep 29, 2026');
     expect(values.join(' ')).toContain('Partial · 3/6 repos complete');
     expect(values.join(' ')).toContain('Includes private totals');
     expect(values.join(' ')).toContain('Sample data');
+    expect(labels.find(label => label.value === '@octo-dev')).toMatchObject({ x: 56, y: 64 });
+    expect(labels.find(label => label.value.includes('Sample data'))).toMatchObject({ x: 56, y: 94, size: 16 });
     expect(values).toContain('aidiff.cwb.sh · Code with Beto');
     expect(values.join(' ')).not.toMatch(/SHARED SNAPSHOT|My GitHub|commits · .*deleted|All commit sizes|Illustrative sample|Snapshot as of|Self-reported|authorship|productivity|%/);
-    expect(values).toHaveLength(10);
+    expect(values).toHaveLength(12);
   });
 
   it('only adds filter context when it changed totals or treats the periods differently', async () => {

@@ -176,8 +176,8 @@ export async function renderShareImage(result: ShareResult, theme: ShareImageThe
   if (!context) throw new Error('Image export is unavailable in this browser.');
   const c = context;
   const colors = theme === 'light'
-    ? { background: '#ffffff', text: '#171717', before: '#a3a3a3', after: '#0ea5e9', muted: '#737373', track: '#e5e5e5' }
-    : { background: '#0a0a0a', text: '#f5f5f5', before: '#bdbdbd', after: '#38bdf8', muted: '#a3a3a3', track: '#242424' };
+    ? { background: '#fafafa', text: '#171717', before: '#666', after: '#0ea5e9', muted: '#666', track: '#e5e5e5' }
+    : { background: '#0a0a0a', text: '#ededed', before: '#a3a3a3', after: '#38bdf8', muted: '#a3a3a3', track: '#242424' };
   c.fillStyle = colors.background;
   c.fillRect(0, 0, 1200, 600);
 
@@ -205,28 +205,29 @@ export async function renderShareImage(result: ShareResult, theme: ShareImageThe
       } else line = next;
     }
     if (line) lines.push(line);
-    lines.forEach((value, index) => text(value, 600, 466 + index * 22, 16, colors.muted, 400, 1088, 14, 'center'));
+    lines.forEach((value, index) => text(value, 600, 480 + index * 22, 16, colors.muted, 400, 1088, 14, 'center'));
   };
 
-  text(`@${result.login}${result.sample ? ' · Sample data' : ''}`, 56, 64, 22, colors.muted, 500, 800);
-  text('Lines added', 1144, 64, 22, colors.muted, 500, 184, 14, 'right');
+  text(`@${result.login}`, 56, 64, 22, colors.text, 550);
+  if (result.sample) text('Sample data · fictional account', 56, 94, 16, colors.muted);
 
   const cutoffTime = Date.parse(`${result.cutoff}T00:00:00.000Z`);
   const beforeEnd = new Date(Math.min(cutoffTime - 1, Date.parse(result.asOf))).toISOString();
   const total = result.before.additions + result.after.additions;
   const columnWidth = 504;
   let numberSize = 108;
-  c.font = font(numberSize, 750);
+  c.font = font(numberSize, 700);
   while (Math.max(...[result.before.additions, result.after.additions].map(value => c.measureText(formatNumber(value)).width)) > columnWidth && numberSize > 28) {
     numberSize -= 1;
-    c.font = font(numberSize, 750);
+    c.font = font(numberSize, 700);
   }
   for (const [index, period] of (['before', 'after'] as const).entries()) {
-    // Equal columns and matching type sizes give both totals equal prominence.
+    // Match the website's label, total, unit and date hierarchy in equal columns.
     const x = 56 + index * 584;
     const additions = result[period].additions;
-    text(period === 'before' ? 'Before AI' : 'After AI', x, 185, 20, colors.muted, 500, 140);
-    text(formatNumber(additions), x + columnWidth / 2, 308, numberSize, colors.text, 750, columnWidth, 28, 'center');
+    text(period === 'before' ? 'Before' : 'After', x, 162, 22, colors.muted);
+    text(formatNumber(additions), x, 276, numberSize, period === 'before' ? colors.before : colors.text, 700, columnWidth, 28);
+    text('lines added', x, 324, 20, colors.muted);
     const range = period === 'before'
       ? result.before.commits > 0 && result.firstCommitAt
         ? `${formatDate(result.firstCommitAt)} – ${formatDate(beforeEnd)}`
@@ -234,22 +235,22 @@ export async function renderShareImage(result: ShareResult, theme: ShareImageThe
       : cutoffTime <= Date.parse(result.asOf)
         ? `${formatDate(result.cutoff)} – ${formatDate(result.asOf)}`
         : 'Cutoff falls after this snapshot';
-    text(range, x + columnWidth, 185, 18, colors.muted, 400, 340, 14, 'right');
+    text(range, x, 364, 20, colors.muted, 400, columnWidth);
   }
 
   const barWidth = 1088;
   c.fillStyle = colors.track;
-  c.fillRect(56, 364, barWidth, 6);
+  c.fillRect(56, 412, barWidth, 6);
   // One continuous bar represents the combined total. Empty periods stay empty.
   if (total > 0) {
     const beforeWidth = result.before.additions / total * barWidth;
     if (result.before.additions > 0) {
       c.fillStyle = colors.before;
-      c.fillRect(56, 364, beforeWidth, 6);
+      c.fillRect(56, 412, beforeWidth, 6);
     }
     if (result.after.additions > 0) {
       c.fillStyle = colors.after;
-      c.fillRect(56 + beforeWidth, 364, barWidth - beforeWidth, 6);
+      c.fillRect(56 + beforeWidth, 412, barWidth - beforeWidth, 6);
     }
   }
 
