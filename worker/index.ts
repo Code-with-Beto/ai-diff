@@ -391,6 +391,9 @@ function secureResponse(response: Response): Response {
 }
 
 async function cachedPublicShare(request: Request, env: Env, url: URL, context?: { waitUntil(promise: Promise<unknown>): void }): Promise<Response> {
+  // Fixed sample paths use the current deployment's assets, so a cached older
+  // sample must never mask a regenerated preview after deployment.
+  if (/^\/s\/sample-(?:light|dark)(?:\/image\.png)?$/.test(url.pathname)) return publicShare(request, env, url.pathname);
   let cache: Cache | undefined;
   let key: Request | undefined;
   if (context && ['GET', 'HEAD'].includes(request.method)) {

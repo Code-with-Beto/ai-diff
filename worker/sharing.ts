@@ -181,8 +181,9 @@ export async function publicShare(request: Request, env: ShareEnvironment, path:
   if (!['GET', 'HEAD'].includes(request.method)) return new Response(null, { status: 405, headers: { Allow: 'GET, HEAD', 'Cache-Control': 'no-store' } });
   const id = match[1];
   const image = Boolean(match[2]);
+  const sample = id === 'sample-light' || id === 'sample-dark';
   let record: ShareHeader & { png?: Uint8Array<ArrayBuffer> };
-  if (id === 'sample-light' || id === 'sample-dark') record = await sampleShare(env, id === 'sample-light' ? 'light' : 'dark', image);
+  if (sample) record = await sampleShare(env, id === 'sample-light' ? 'light' : 'dark', image);
   else {
     if (!env.SHARE_RESULTS) throw new ApiError(503, 'sharing_unavailable', 'Public links are temporarily unavailable. Please try again later.');
     let stored: ArrayBuffer | null;
@@ -192,7 +193,7 @@ export async function publicShare(request: Request, env: ShareEnvironment, path:
     try { record = decodeRecord(stored); }
     catch { throw new ApiError(503, 'sharing_unavailable', 'This shared result is temporarily unavailable.'); }
   }
-  if (image) return new Response(request.method === 'HEAD' ? null : record.png, { headers: { 'Content-Type': 'image/png', 'Content-Length': String(record.png!.byteLength), 'Cache-Control': 'public, max-age=86400' } });
+  if (image) return new Response(request.method === 'HEAD' ? null : record.png, { headers: { 'Content-Type': 'image/png', 'Content-Length': String(record.png!.byteLength), 'Cache-Control': `public, max-age=${sample ? 300 : 86400}` } });
   // Request the asset root so canonical /index.html redirects are not involved.
   let html = await (await asset(env, '/')).text();
   html = html.replace(/<title\b[^>]*>[\s\S]*?<\/title\s*>/gi, '').replace(/<meta\b[^>]*>/gi, tag => {

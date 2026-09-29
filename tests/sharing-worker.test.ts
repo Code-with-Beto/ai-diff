@@ -361,6 +361,38 @@ describe('positive public edge caching', () => {
     expect(cached.put).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    ['light', ''], ['light', '/image.png'], ['dark', ''], ['dark', '/image.png'],
+  ])('ignores stale edge entries for mutable %s sample assets (%s)', async (theme, suffix) => {
+    const cached = cacheHarness();
+    cached.match.mockResolvedValue(new Response('stale deployment', { headers: { 'Cache-Control': 'public, max-age=86400' } }));
+    const path = `/s/sample-${theme}${suffix}`;
+    const get = await worker.fetch(publicRequest(`${path}?preview=current`), env, cached.context);
+    expect(get.status).toBe(200);
+    expect(get.headers.get('cache-control')).toBe('public, max-age=300');
+    expect(get.headers.get('x-content-type-options')).toBe('nosniff');
+    const bytes = Buffer.from(await get.arrayBuffer());
+    if (suffix) {
+      expect(get.headers.get('content-type')).toBe('image/png');
+      expect(bytes).toEqual(png);
+    } else {
+      expect(get.headers.get('content-type')).toContain('text/html');
+      expect(decodeShare(meta(bytes.toString(), 'ai-diff-result')!)).toEqual(sample);
+      expect(meta(bytes.toString(), 'og:image')).toBe(`${env.APP_ORIGIN}${path}/image.png`);
+    }
+    const head = await worker.fetch(publicRequest(path, 'HEAD'), env, cached.context);
+    expect(head.status).toBe(200);
+    expect(head.headers.get('cache-control')).toBe('public, max-age=300');
+    expect(head.headers.get('content-type')).toBe(get.headers.get('content-type'));
+    expect(head.headers.get('content-length')).toBe(String(bytes.byteLength));
+    expect(await head.text()).toBe('');
+    expect(cached.match).not.toHaveBeenCalled();
+    expect(cached.put).not.toHaveBeenCalled();
+    expect(cached.pending).toHaveLength(0);
+    expect(kvGet).not.toHaveBeenCalled();
+    expect(kvPut).not.toHaveBeenCalled();
+  });
+
   it('never caches negative lookups, storage errors or unsupported methods', async () => {
     const cached = cacheHarness();
     expect((await worker.fetch(publicRequest('/s/AAAAAAAAAAAAAAAA'), env, cached.context)).status).toBe(404);
