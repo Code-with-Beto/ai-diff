@@ -248,7 +248,7 @@ describe('bounded file pagination', () => {
 
 describe('bounded concurrent file batches', () => {
   const oids = ['a', 'b', 'c', 'd'].map(letter => letter.repeat(40));
-  const handles = () => Promise.all(oids.map(oid => handle({ oid })));
+  const handles = (count = 2) => Promise.all(oids.slice(0, count).map(oid => handle({ oid })));
 
   it.each([{ Cookie: '' }, { Origin: 'https://other.invalid' }, { 'x-csrf-token': 'wrong' }] as Record<string, string>[])('requires session, origin and CSRF before batch reads (%j)', async headers => {
     const result = await worker.fetch(postBatch({ handles: await handles() }, headers), env);
@@ -283,7 +283,7 @@ describe('bounded concurrent file batches', () => {
     expect(charge).toHaveBeenCalledTimes(values.length * 2);
   });
 
-  it('resolves repository access once, launches four bounded reads, and retains input order without leaking upstream fields', async () => {
+  it('resolves repository access once, launches two bounded reads, and retains input order without leaking upstream fields', async () => {
     const release: (() => void)[] = [];
     let active = 0, maximum = 0;
     upstream.mockImplementation(async url => {
@@ -297,20 +297,36 @@ describe('bounded concurrent file batches', () => {
     const charge = vi.fn().mockResolvedValue({ success: true });
     const general = vi.fn().mockResolvedValue({ success: false });
     const pending = worker.fetch(postBatch({ handles: await handles() }, { 'CF-Connecting-IP': '192.0.2.10' }), { ...env, FILE_LIMITER: { limit: charge }, API_LIMITER: { limit: general } });
-    await vi.waitFor(() => expect(release).toHaveLength(4));
+    await vi.waitFor(() => expect(release).toHaveLength(2));
     release.reverse().forEach(resolve => resolve());
     const result = await pending;
     const data = await result.json() as FileScanBatch;
     expect(result.status).toBe(200);
     expect(result.headers.get('cache-control')).toBe('no-store');
-    expect(data.results.map(item => item.oid)).toEqual(oids);
+    expect(data.results.map(item => item.oid)).toEqual(oids.slice(0, 2));
     expect(data.results.every(item => 'page' in item && item.page.complete && item.page.oid === item.oid)).toBe(true);
-    expect(maximum).toBe(4);
+    expect(maximum).toBe(2);
     expect(upstream.mock.calls.filter(([url]) => String(url).endsWith('/graphql'))).toHaveLength(1);
-    expect(upstream).toHaveBeenCalledTimes(5);
+    expect(upstream).toHaveBeenCalledTimes(3);
     expect(JSON.stringify(data)).not.toMatch(/SECRET|private@example|patch|raw_url|message/);
     expect(general).not.toHaveBeenCalled();
-    expect(charge.mock.calls).toEqual(Array.from({ length: 4 }, () => [[{ key: `files:user:${viewer.id}` }], [{ key: 'files:ip:192.0.2.10' }]]).flat());
+    expect(charge.mock.calls).toEqual(Array.from({ length: 2 }, () => [[{ key: `files:user:${viewer.id}` }], [{ key: 'files:ip:192.0.2.10' }]]).flat());
+  });
+
+  it.each([3, 4])('keeps legacy %i-handle envelopes safe with verified, charged individual fallbacks and no GitHub reads', async count => {
+    const charge = vi.fn().mockResolvedValue({ success: true });
+    const result = await worker.fetch(postBatch({ handles: await handles(count) }), { ...env, FILE_LIMITER: { limit: charge } });
+    expect(result.status).toBe(200);
+    expect(result.headers.get('cache-control')).toBe('no-store');
+    const data = await result.json() as FileScanBatch;
+    expect(data.results.map(item => item.oid)).toEqual(oids.slice(0, count));
+    expect(data.results.every(item => 'error' in item && item.error.code === 'file_batch_retry_single')).toBe(true);
+    expect(charge).toHaveBeenCalledTimes(count * 2);
+    expect(upstream).not.toHaveBeenCalled();
+    const invalid = await handles(count);
+    invalid[count - 1] = 'tampered';
+    expect((await worker.fetch(postBatch({ handles: invalid }), env)).status).toBe(400);
+    expect(upstream).not.toHaveBeenCalled();
   });
 
   it('charges each requested page before upstream reads and refuses a batch when a page allowance fails', async () => {
@@ -349,10 +365,13 @@ describe('bounded concurrent file batches', () => {
       if (sha === oids[3]) return new Response(new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(new Uint8Array(FILE_BATCH_RESPONSE_LIMIT + 1)); }, cancel() { cancelled = true; } }));
       return response(restCommit({ sha }), rateHeaders);
     });
-    const tokens = await handles();
-    const result = await worker.fetch(postBatch({ handles: tokens }), env);
-    const data = await result.json() as FileScanBatch;
-    expect(result.status).toBe(200);
+    const tokens = await handles(4);
+    const data: FileScanBatch = { results: [] };
+    for (let index = 0; index < tokens.length; index += 2) {
+      const result = await worker.fetch(postBatch({ handles: tokens.slice(index, index + 2) }), env);
+      expect(result.status).toBe(200);
+      data.results.push(...(await result.json() as FileScanBatch).results);
+    }
     expect(data.results[0]).toMatchObject({ oid: oids[0], page: { complete: true } });
     expect(data.results[1]).toMatchObject({ oid: oids[1], error: { code: 'rate_limited', retryAfter: 90 } });
     expect(data.results[2]).toMatchObject({ oid: oids[2], error: { code: 'files_unavailable' } });

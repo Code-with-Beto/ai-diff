@@ -16,14 +16,14 @@ function reader(overrides: Partial<FileBatchReader> = {}): FileBatchReader {
 const signal = () => new AbortController().signal;
 
 describe('bounded file batches', () => {
-  it('reduces12commits to3requests and retains exact independently verified file totals', async () => {
+  it('checks12commits in3waves of two small requests with exact independently verified totals', async () => {
     const calls: string[][] = []; const completed: CommitRecord[] = []; let active = 0, peak = 0;
     const transport = reader({ batch: async handles => {
       active++; peak = Math.max(peak, active); calls.push(handles); await Promise.resolve(); active--;
       return { results: handles.map(oid => ({ oid, page: page(oid) })) };
     } });
     await inspectFileBatches(Array.from({ length: 12 }, (_, i) => commit(String(i))), transport, signal(), (_, value) => completed.push(value));
-    expect(calls.map(call => call.length)).toEqual([4, 4, 4]); expect(peak).toBe(1);
+    expect(calls.map(call => call.length)).toEqual([2, 2, 2, 2, 2, 2]); expect(peak).toBe(2);
     expect(completed).toHaveLength(12); expect(completed.every(value => value.filesComplete)).toBe(true);
     expect(completed.reduce((sum, value) => sum + value.files!.reduce((subtotal, item) => subtotal + item.additions, 0), 0)).toBe(252);
   });
@@ -51,17 +51,44 @@ describe('bounded file batches', () => {
   });
   it('shares one cooldown, preserves successes, and retries only rate-limited items', async () => {
     const calls: string[][] = [], pauses: number[] = [], completed: string[] = [];
+    const attempts = new Set<string>();
     await inspectFileBatches([commit('a'), commit('b'), commit('c')], reader({ batch: async handles => {
-      calls.push(handles); return { results: handles.map(oid => calls.length === 1 && oid !== 'a'
-        ? { oid, error: { code: 'rate_limited', message: 'Pause', retryAfter: oid === 'b' ? 90 : 120 } }
-        : { oid, page: page(oid) }) };
+      calls.push(handles); return { results: handles.map(oid => {
+        const first = !attempts.has(oid); attempts.add(oid);
+        return first && oid !== 'a' ? { oid, error: { code: 'rate_limited', message: 'Pause', retryAfter: oid === 'b' ? 90 : 120 } } : { oid, page: page(oid) };
+      }) };
     }, pause: async delay => { pauses.push(delay); } }), signal(), (_, value) => completed.push(value.oid));
-    expect(calls).toEqual([['a', 'b', 'c'], ['b', 'c']]); expect(pauses).toEqual([120000]); expect(completed).toEqual(['a', 'b', 'c']);
+    expect(calls).toEqual([['a', 'b'], ['c'], ['b', 'c']]); expect(pauses).toEqual([120000]); expect(completed).toEqual(['a', 'b', 'c']);
   });
   it('retries temporary upstream errors twice, then explicitly leaves unknown data out', async () => {
     let calls = 0; const pauses: number[] = []; let result: CommitRecord | undefined;
     await inspectFileBatches([commit('a')], reader({ batch: async () => { calls++; throw new ApiError({ code: 'github_timeout', message: 'Timed out' }); }, pause: async delay => { pauses.push(delay); } }), signal(), (_, value) => { result = value; });
     expect(calls).toBe(3); expect(pauses).toEqual([1000, 2000]); expect(result?.filesComplete).toBe(false); expect(result?.files).toBeUndefined();
+  });
+  it('preserves a successful parallel request when its sibling loses the network connection', async () => {
+    const calls: string[][] = [], completed: string[] = [], pauses: number[] = [];
+    let first = true;
+    await inspectFileBatches(['a','b','c','d'].map(oid => commit(oid)), reader({ batch: async handles => {
+      calls.push(handles);
+      if (handles[0] === 'a' && first) { first = false; throw new TypeError('Failed to fetch'); }
+      return { results: handles.map(oid => ({ oid, page: page(oid) })) };
+    }, pause: async delay => { pauses.push(delay); } }), signal(), (_, value) => completed.push(value.oid));
+    expect(calls).toEqual([['a','b'],['c','d'],['a','b']]);
+    expect(completed).toEqual(['c','d','a','b']); expect(pauses).toEqual([1000]);
+  });
+  it('waits for both parallel requests before a shared cooldown or another wave', async () => {
+    const events: string[] = []; let release: (() => void) | undefined;
+    const delayed = new Promise<void>(resolve => { release = resolve; });
+    let retry = false;
+    const scanning = inspectFileBatches(['a','b','c','d'].map(oid => commit(oid)), reader({ batch: async handles => {
+      events.push(handles.join(''));
+      if (handles[0] === 'a' && !retry) { retry = true; return { results: handles.map(oid => ({ oid, error: { code: 'rate_limited', message: 'Pause', retryAfter: 60 } })) }; }
+      if (handles[0] === 'c') await delayed;
+      return { results: handles.map(oid => ({ oid, page: page(oid) })) };
+    }, pause: async () => { events.push('pause'); } }), signal(), () => {});
+    await Promise.resolve(); await Promise.resolve();
+    expect(events).toEqual(['ab','cd']); release!(); await scanning;
+    expect(events).toEqual(['ab','cd','pause','ab']);
   });
   it('never loops forever on rate limits', async () => {
     let calls = 0;

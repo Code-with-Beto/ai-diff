@@ -5,7 +5,10 @@ import { createSigner, createVerifier, sign, verify, type CryptoEnvironment } fr
 export const FILE_RESPONSE_LIMIT = 2 * 1024 * 1024;
 export const FILE_BATCH_RESPONSE_LIMIT = 384 * 1024;
 export const FILE_BATCH_BODY_LIMIT = 32 * 1024;
+// Continue accepting the original envelope while limiting active work per
+// invocation to fit Workers Free's CPU budget on measured production traffic.
 export const FILE_BATCH_SIZE = 4;
+export const FILE_BATCH_CONCURRENCY = 2;
 const FILES_PER_PAGE = 100;
 const MAX_FILES = 3000;
 const PURPOSE = 'commit-files';
@@ -193,10 +196,15 @@ export async function scanCommitFilesBatch(
     throw new ApiError(400, 'invalid_file_scan', 'Use distinct commits from the same repository in each file batch.');
   }
   await charge?.(handles.length);
+  if (handles.length > FILE_BATCH_CONCURRENCY) {
+    return { results: handles.map(handle => ({ oid: handle.oid, error: {
+      code: 'file_batch_retry_single', message: 'This file batch needs separate requests. Retry each handle with the single-file endpoint.',
+    } })) };
+  }
   const repository = await readRepository(session, handles);
   let signer: Promise<(value: unknown) => Promise<string>> | undefined;
   const signNext = async (value: FileHandle) => (await (signer ??= createSigner(env, PURPOSE)))(value);
-  // Four bounded bodies use at most 1.5 MiB of JSON parsing per invocation.
+  // Two bounded bodies use at most 768 KiB of JSON parsing per invocation.
   // A heavy page is retried by itself with the existing 2 MiB limit.
   const pages = await Promise.allSettled(handles.map(handle => readFilePage(env, session, handle, repository, FILE_BATCH_RESPONSE_LIMIT, signNext)));
   for (const page of pages) {

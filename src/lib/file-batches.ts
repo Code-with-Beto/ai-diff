@@ -4,6 +4,11 @@ import { ApiError } from '../api';
 
 const fatal = new Set(['session_expired', 'authentication_required', 'unauthenticated', 'invalid_request', 'invalid_scan', 'invalid_file_scan', 'forks_excluded', 'repository_visibility_changed', 'repository_unavailable']);
 const transient = new Set(['github_timeout', 'github_unavailable', 'github_request_aborted', 'github_fetch_type_error', 'UNAVAILABLE']);
+function readError(error: unknown): ApiError {
+  if (error instanceof ApiError) return error;
+  if (error instanceof TypeError) return new ApiError({ code: 'UNAVAILABLE', message: 'The connection was interrupted. Please retry.' });
+  throw error;
+}
 interface Pending {
   commit: CommitRecord; index: number; handle: string; single: boolean;
   files: CommitFile[]; paths: Set<string>; handles: Set<string>; retries: number;
@@ -14,7 +19,7 @@ export interface FileBatchReader {
   pause(milliseconds: number, reason: 'rate' | 'retry'): Promise<void>;
 }
 
-/** One browser request at a time; a Worker batch performs four bounded reads. */
+/** Two small requests per wave keep four reads fast within each Worker's CPU budget. */
 export async function inspectFileBatches(
   commits: CommitRecord[], reader: FileBatchReader, signal: AbortSignal,
   onCommit: (index: number, commit: CommitRecord) => void,
@@ -41,13 +46,24 @@ export async function inspectFileBatches(
     while (!group[0].single && group.length < 4 && queue.length && !queue[0].single) group.push(queue.shift()!);
     let results: FileScanBatch['results'];
     try {
-      results = group[0].single
-        ? [{ oid: group[0].commit.oid, page: await reader.single(group[0].handle) }]
-        : (await reader.batch(group.map(item => item.handle))).results;
+      if (group[0].single) results = [{ oid: group[0].commit.oid, page: await reader.single(group[0].handle) }];
+      else {
+        const chunks = [group.slice(0, 2), group.slice(2)].filter(chunk => chunk.length);
+        const responses = await Promise.allSettled(chunks.map(chunk => reader.batch(chunk.map(item => item.handle))));
+        signal.throwIfAborted();
+        // No next wave starts before both requests finish. Successful siblings
+        // survive retries, and any rate limit produces one shared cooldown.
+        results = responses.flatMap((response, index) => {
+          if (response.status === 'fulfilled') return response.value.results;
+          const error = readError(response.reason);
+          return chunks[index].map(item => ({ oid: item.commit.oid, error: { code: error.code, message: error.message, retryAfter: error.retryAfter } }));
+        });
+      }
     } catch (error) {
       signal.throwIfAborted();
-      if (!(error instanceof ApiError) || fatal.has(error.code)) throw error;
-      results = group.map(item => ({ oid: item.commit.oid, error: { code: error.code, message: error.message, retryAfter: error.retryAfter } }));
+      const failure = readError(error);
+      if (fatal.has(failure.code)) throw failure;
+      results = group.map(item => ({ oid: item.commit.oid, error: { code: failure.code, message: failure.message, retryAfter: failure.retryAfter } }));
     }
     signal.throwIfAborted();
     const byOid = new Map(results.map(result => [result.oid, result]));

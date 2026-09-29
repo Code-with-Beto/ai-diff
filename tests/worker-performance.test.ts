@@ -125,7 +125,7 @@ it.skipIf(process.env.WORKER_BENCHMARK !== '1')('reports bounded local file-page
   })}\n`);
 });
 
-it.skipIf(process.env.WORKER_BENCHMARK !== '1').each(['normal', 'near-cap', 'fallback'] as const)('reports local four-page batch timing: %s', async mode => {
+it.skipIf(process.env.WORKER_BENCHMARK !== '1').each(['normal', 'near-cap', 'fallback'] as const)('reports local two-page batch timing: %s', async mode => {
   const env: Env = {
     APP_ORIGIN: 'https://benchmark.invalid', GITHUB_APP_SLUG: 'benchmark-only', GITHUB_CLIENT_ID: 'benchmark-only',
     GITHUB_CLIENT_SECRET: 'not-a-real-secret', SESSION_SECRET: btoa('0123456789abcdef0123456789abcdef'),
@@ -134,7 +134,7 @@ it.skipIf(process.env.WORKER_BENCHMARK !== '1').each(['normal', 'near-cap', 'fal
   const expiresAt = Math.floor(Date.now() / 1000) + 3600;
   const user = { id: 'U_benchmark', login: 'benchmark-user', avatarUrl: 'https://avatars.githubusercontent.com/u/1' };
   const session = await seal(env, 'session', { version: 1, sessionId: 'benchmark-session', user, token: 'ghu_not-a-real-token', csrfToken: 'benchmark-csrf', expiresAt });
-  const oids = ['a', 'b', 'c', 'd'].map(letter => letter.repeat(40));
+  const oids = ['a', 'b'].map(letter => letter.repeat(40));
   const committedDate = '2025-12-01T00:00:00Z';
   const handles = await Promise.all(oids.map(oid => sign(env, 'commit-files', {
     version: 1, purpose: 'commit-files', sessionId: 'benchmark-session', githubUserId: user.id,
@@ -166,7 +166,7 @@ it.skipIf(process.env.WORKER_BENCHMARK !== '1').each(['normal', 'near-cap', 'fal
       const output = await response.json() as FileScanBatch;
       const elapsed = performance.now() - started;
       expect(response.status).toBe(200);
-      expect(output.results).toHaveLength(4);
+      expect(output.results).toHaveLength(2);
       for (const result of output.results) {
         if (mode === 'fallback') expect(result).toMatchObject({ error: { code: 'file_batch_retry_single' } });
         else {
@@ -179,7 +179,7 @@ it.skipIf(process.env.WORKER_BENCHMARK !== '1').each(['normal', 'near-cap', 'fal
   } finally { vi.stubGlobal('fetch', originalFetch); }
   samples.sort((a, b) => a - b);
   process.stdout.write(`${JSON.stringify({ benchmark: `file-batch-${mode}-local-wall-time`, runtime: process.version, platform: `${process.platform}/${process.arch}`,
-    warmups: 10, iterations: samples.length, pages: 4, upstreamBytesPerPage: responseBytes, aggregateUpstreamBytes: responseBytes * 4,
+    warmups: 10, iterations: samples.length, pages: 2, upstreamBytesPerPage: responseBytes, aggregateUpstreamBytes: responseBytes * 2,
     medianMs: Number(((samples[49] + samples[50]) / 2).toFixed(3)), p95Ms: Number(samples[94].toFixed(3)),
     note: 'Local wall-time proxy with mocked GitHub and rate limiter; not measured Cloudflare CPU time.',
   })}\n`);
