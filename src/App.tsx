@@ -401,7 +401,7 @@ export default function App() {
             <div className="repo-selection-status"><span className="small-text" role="status">{loadingRepos ? 'Finding repos…' : `${selectedCount} selected`}</span><HelpTooltip label="About repository selection">Only your authored commits are counted. Forks are excluded.</HelpTooltip></div>
             <div className="repo-bulk-actions">
               <Tooltip label={search ? 'Select matching repositories' : 'Select all repositories'}><button type="button" className="icon-button" aria-label={search ? 'Select matching repositories' : 'Select all repositories'} disabled={scanning || sample || loadingRepos || addingRepo} onClick={() => setSelected(previous => new Set([...previous, ...visibleRepositories.map(repository => repository.id)]))}><ListChecks size={17} aria-hidden="true" /></button></Tooltip>
-              <Tooltip label="Clear selection"><button type="button" className="icon-button" aria-label="Clear selection" disabled={scanning || sample || loadingRepos || addingRepo || !selectedCount} onClick={() => setSelected(new Set())}><ListX size={17} aria-hidden="true" /></button></Tooltip>
+              <Tooltip label="Clear selection"><button type="button" className="icon-button" aria-label="Clear selection" disabled={scanning || sample || loadingRepos || addingRepo} onClick={() => setSelected(new Set())}><ListX size={17} aria-hidden="true" /></button></Tooltip>
             </div>
           </div>
           <RepositorySelect repositories={visibleRepositories} selected={selected} disabled={scanning || sample || loadingRepos || addingRepo} loading={loadingRepos} onToggle={(id, checked) => setSelected(previous => {
