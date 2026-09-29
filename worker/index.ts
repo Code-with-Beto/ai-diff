@@ -14,6 +14,7 @@ export interface Env {
   ASSETS: { fetch(request: Request): Promise<Response> };
   AUTH_LIMITER?: { limit(options: { key: string }): Promise<{ success: boolean }> };
   API_LIMITER?: { limit(options: { key: string }): Promise<{ success: boolean }> };
+  SCAN_LIMITER?: { limit(options: { key: string }): Promise<{ success: boolean }> };
   FILE_LIMITER?: { limit(options: { key: string }): Promise<{ success: boolean }> };
   SHARE_LIMITER?: { limit(options: { key: string }): Promise<{ success: boolean }> };
   SHARE_RESULTS?: ShareStore;
@@ -341,6 +342,14 @@ async function route(request: Request, env: Env, url: URL): Promise<Response> {
       }
     }));
   }
+  // Large accounts can need hundreds of history pages even when all file
+  // details are already verified. Keep this allowance separate from discovery.
+  if ((path === '/api/scan/start' || path === '/api/scan/page') && request.method === 'POST') {
+    await enforceLimit(env.SCAN_LIMITER, `scan:user:${session.user.id}`);
+    await enforceLimit(env.SCAN_LIMITER, `scan:ip:${request.headers.get('CF-Connecting-IP') ?? 'unknown'}`);
+    const input = await body(request);
+    return path === '/api/scan/start' ? startScan(env, session, input) : scanPage(env, session, input);
+  }
   await enforceLimit(env.API_LIMITER, `user:${session.user.id}`);
   if (path === '/api/share' && request.method === 'POST') {
     await enforceLimit(env.SHARE_LIMITER, `share:user:${session.user.id}`);
@@ -368,8 +377,6 @@ async function route(request: Request, env: Env, url: URL): Promise<Response> {
   }
   if (path === '/api/github/repositories' && request.method === 'GET') return repositories(env, session, url);
   if (path === '/api/github/repository' && request.method === 'POST') return manualRepository(session, await body(request));
-  if (path === '/api/scan/start' && request.method === 'POST') return startScan(env, session, await body(request));
-  if (path === '/api/scan/page' && request.method === 'POST') return scanPage(env, session, await body(request));
   throw new ApiError(404, 'not_found', 'This API route does not exist.');
 }
 

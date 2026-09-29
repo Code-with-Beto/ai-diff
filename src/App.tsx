@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Check, ChevronDown, CircleHelp, Github, LockKeyhole, LogOut, Plus, Search, Square, X } from 'lucide-react';
-import type { AnalysisResult, CommitRecord, InstallationsPage, Repository, RepositoryPage, RepositoryProgress, FileScanBatch, FileScanPage, ScanPage, ScanStart, SessionInfo, ShareResult } from '../shared/types';
-import { ApiError, api, waitForRetry } from './api';
+import type { AnalysisResult, CommitRecord, InstallationsPage, Repository, RepositoryPage, RepositoryProgress, SessionInfo, ShareResult } from '../shared/types';
+import { ApiError, api } from './api';
 import { analyzeCommits, formatDate, formatNumber } from './lib/analysis';
 import { SAMPLE_AS_OF, SAMPLE_COMMITS, SAMPLE_REPOSITORIES, SAMPLE_USER } from './lib/sample';
 import { createShareResult, decodeShare, describeAdditionChange } from './lib/share';
 import { readPublishedShare } from './lib/published-share';
-import { inspectFileBatches } from './lib/file-batches';
+import { scanRepositories } from './lib/repository-scan';
 import { InspectionCache } from './lib/inspection-cache';
 import { isNonForkRepository } from '../shared/repository-policy';
 import { callbackMessage, comparisonDateAllowed, createOperationScope, isAuthenticationError, parseRepositorySource } from './lib/client-state';
@@ -269,143 +269,40 @@ export default function App() {
     const scanStarted = performance.now();
     const snapshotTime = new Date().toISOString();
     setAsOf(snapshotTime); setCommits([]); setError(''); setScanning(true); setScanMessage('Starting your analysis…');
-    let states: RepositoryProgress[] = chosen.map(repository => ({ repository, status: 'pending', commits: 0 }));
-    setProgress([...states]);
-    let allCommits: CommitRecord[] = [];
-    const inspectedBySha = new Map<string, CommitRecord>();
-    inspectionCache.current.forAccount(session?.user?.id ?? null);
-    let reused = 0;
-    let lastPublish = 0;
-    function publish(force = false) {
-      if (task.isCurrent() && (force || performance.now() - lastPublish >= 250)) {
-        setCommits([...allCommits]); lastPublish = performance.now();
-      }
-    }
-    let interrupted = false;
-    function update(index: number, patch: Partial<RepositoryProgress>) {
-      if (!task.isCurrent()) return;
-      states[index] = { ...states[index], ...patch }; setProgress(states.filter(item => isNonForkRepository(item.repository)));
-    }
-    async function request<T>(path: string, body: unknown): Promise<T> {
-      let retries = 0;
-      for (;;) {
-        if (!task.isActive()) throw new DOMException('Aborted', 'AbortError');
-        try { return await api<T>(path, { body, csrf: session?.csrfToken, signal: task.signal }); }
-        catch (value) {
-          if (!task.isActive()) throw value;
-          if (value instanceof ApiError && value.code === 'rate_limited' && value.retryAfter && value.retryAfter > 0 && retries < 4) {
-            const delay = Math.max(value.retryAfter, 60 * 2 ** retries++) * 1000;
-            setScanMessage(`GitHub needs a pause. Continuing after ${new Date(Date.now() + delay).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}. You can cancel anytime.`);
-            await waitForRetry(delay, task.signal);
-          } else throw value;
-        }
-      }
-    }
+    setProgress(chosen.map(repository => ({ repository, status: 'pending', commits: 0 })));
     try {
-      for (let index = 0; index < chosen.length; index++) {
-        if (!task.isActive()) break;
-        const repositoryCommitStart = allCommits.length;
-        const repo = chosen[index]; let fileFailures = 0; update(index, { status: 'scanning' }); setScanMessage(`Reading ${repo.nameWithOwner}`);
-        try {
-          const start = await request<ScanStart>('/api/scan/start', { repositoryId: repo.id, includePrivate, asOf: snapshotTime, includeFirstPage: true });
-          if (!task.isActive()) break;
-          if (!isNonForkRepository(start.repository)) throw new ApiError({ code: 'forks_excluded', message: 'Forks are excluded.' });
-          update(index, { repository: start.repository });
-          let handle = start.handle;
-          let firstPage = start.initialPage;
-          while ((handle || firstPage) && task.isActive()) {
-            const page = firstPage ?? await request<ScanPage>('/api/scan/page', { handle });
-            firstPage = undefined;
-            if (!task.isActive()) break;
-            const received = page.commits.map(commit => ({ ...commit, repository: { id: start.repository.id, nameWithOwner: start.repository.nameWithOwner, isPrivate: start.repository.isPrivate } }));
-            const offset = allCommits.length;
-            allCommits.push(...received);
-            const unchecked: CommitRecord[] = [];
-            const positions = new Map<string, number[]>();
-            for (let position = 0; position < received.length; position++) {
-              const commit = received[position];
-              if (commit.parentCount > 1 || commit.authorId !== session?.user?.id) continue;
-              const cached = inspectionCache.current.get(commit);
-              if (cached) {
-                allCommits[offset + position] = cached; inspectedBySha.set(commit.oid, cached); reused += 1;
-              } else {
-                const duplicates = positions.get(commit.oid);
-                if (duplicates) duplicates.push(offset + position);
-                else { positions.set(commit.oid, [offset + position]); unchecked.push(commit); }
-              }
-            }
-            publish();
-            setScanMessage(`Checking files in ${repo.nameWithOwner} · ${formatNumber(inspectedBySha.size)} commits checked${reused ? ` · ${formatNumber(reused)} reused` : ''}`);
-            await inspectFileBatches(unchecked, {
-              batch: handles => api<FileScanBatch>('/api/scan/files/batch', { body: { handles }, csrf: session?.csrfToken, signal: task.signal }),
-              single: fileHandle => api<FileScanPage>('/api/scan/files', { body: { handle: fileHandle }, csrf: session?.csrfToken, signal: task.signal }),
-              pause: async (delay, reason) => {
-                setScanMessage(reason === 'rate' ? `GitHub needs a pause. Continuing after ${new Date(Date.now() + delay).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}. You can cancel anytime.` : 'Retrying a temporary GitHub error…');
-                await waitForRetry(delay, task.signal);
-              },
-            }, task.signal, (_position, inspected) => {
-              if (!task.isActive()) return;
-              if (inspected.filesComplete) { inspectedBySha.set(inspected.oid, inspected); inspectionCache.current.put(inspected); }
-              else fileFailures += 1;
-              for (const position of positions.get(inspected.oid) ?? []) allCommits[position] = { ...allCommits[position], files: inspected.files, filesComplete: inspected.filesComplete, filesError: inspected.filesError };
-              publish();
-              setScanMessage(`Checking files in ${repo.nameWithOwner} · ${formatNumber(inspectedBySha.size)} commits checked${reused ? ` · ${formatNumber(reused)} reused` : ''}`);
-            });
-            if (!task.isActive()) break;
-            publish(true);
-            update(index, { commits: states[index].commits + page.commits.length });
-            handle = page.nextHandle;
-            setScanMessage(`Reading ${repo.nameWithOwner} · ${formatNumber(allCommits.length)} commits received`);
-            if (handle && page.remaining <= 10) {
-              const delay = Math.max(1000, Math.min(3600000, new Date(page.resetAt).getTime() - Date.now() + 1000));
-              setScanMessage(`GitHub rate limit reached. Analysis resumes at ${new Date(Date.now() + delay).toLocaleTimeString()}.`);
-              await waitForRetry(delay, task.signal);
-            }
-          }
-          if (task.isActive()) update(index, { status: 'complete', ...(fileFailures ? { message: `${fileFailures} commits could not finish file checks. They are excluded while lockfile filtering is on.` } : {}) });
-        } catch (value) {
-          if (!task.isActive()) break;
-          if (value instanceof ApiError && value.code === 'forks_excluded') {
-            // Sequential scans keep each repository's pages contiguous. Drop any
-            // earlier pages too if GitHub identifies this repository as a fork.
-            allCommits = allCommits.slice(0, repositoryCommitStart); setCommits([...allCommits]);
-            update(index, { repository: { ...repo, isFork: true }, status: 'unavailable', commits: 0 });
-            setRepositories(previous => previous.filter(item => item.id !== repo.id));
-            setSelected(previous => { const next = new Set(previous); next.delete(repo.id); return next; });
-            continue;
-          }
-          const message = value instanceof Error ? value.message : 'Could not finish this repository.';
-          update(index, { status: states[index].commits ? 'incomplete' : 'unavailable', message });
-          if (isAuthenticationError(value)) { interrupted = true; expireSession(); break; }
-          if (value instanceof ApiError && ['invalid_scan', 'invalid_file_scan'].includes(value.code)) { interrupted = true; setError('This scan expired. Start a new scan to continue.'); break; }
-          if (value instanceof ApiError && ['rate_limited', 'invalid_request'].includes(value.code)) { interrupted = true; setError(value.code === 'rate_limited' ? 'GitHub is still limiting this scan. Try again later; completed file checks can be reused in this tab.' : value.message); break; }
-        }
+      const scanned = await scanRepositories({
+        repositories: chosen, userId: session!.user!.id, includePrivate, asOf: snapshotTime,
+        signal: task.signal, cache: inspectionCache.current,
+        request: (path, body, signal) => api(path, { body, csrf: session?.csrfToken, signal }),
+        onUpdate: update => {
+          if (!task.isCurrent()) return;
+          setCommits(update.commits); setProgress(update.progress); setScanMessage(update.message);
+        },
+      });
+      if (!task.isCurrent()) return;
+      // Fork status can change while scanning. Remove only repositories rejected
+      // by the current scan, leaving concurrent results and selections intact.
+      const retained = new Set(scanned.progress.map(item => item.repository.id));
+      const forks = new Set(chosen.filter(repo => !retained.has(repo.id)).map(repo => repo.id));
+      if (forks.size) {
+        setRepositories(previous => previous.filter(repo => !forks.has(repo.id)));
+        setSelected(previous => new Set([...previous].filter(id => !forks.has(id))));
       }
+      const partial = scanned.progress.some(item => item.status !== 'complete');
+      const incompleteFiles = scanned.progress.some(item => item.status === 'complete' && !!item.message);
+      const elapsed = (performance.now() - scanStarted) / 1000;
+      const duration = elapsed < 60 ? `${elapsed.toFixed(elapsed < 10 ? 1 : 0)}s` : `${Math.floor(elapsed / 60)}m ${Math.floor(elapsed % 60)}s`;
+      setScanMessage(task.signal.aborted ? 'Scan canceled. Results include only the history read so far.' : scanned.error || partial ? 'Scan stopped with partial results. See repository coverage below.' : incompleteFiles ? `History scan finished in ${duration}. Some file checks are incomplete; filtered totals omit those commits.` : `Scan finished in ${duration}.${scanned.reused ? ` ${formatNumber(scanned.reused)} verified commits reused.` : ''}`);
+      if (isAuthenticationError(scanned.error)) expireSession();
+      else if (scanned.error instanceof ApiError) setError(scanned.error.code === 'rate_limited' ? 'GitHub is still limiting this scan. Try again later; completed file checks can be reused in this tab.' : scanned.error.message);
+    } catch (value) {
+      if (task.isActive()) setError(value instanceof Error ? value.message : 'Could not finish this scan.');
     } finally {
-      if (task.isCurrent()) {
-        publish(true);
-        const uncheckedByRepository = new Map<string, Set<string>>();
-        for (const commit of allCommits) {
-          if (!commit.repository || commit.parentCount > 1 || commit.authorId !== session?.user?.id || inspectedBySha.get(commit.oid)?.filesComplete) continue;
-          const unchecked = uncheckedByRepository.get(commit.repository.id) ?? new Set<string>();
-          unchecked.add(commit.oid); uncheckedByRepository.set(commit.repository.id, unchecked);
-        }
-        states = states.filter(item => isNonForkRepository(item.repository)).map(item => {
-          if (item.status === 'pending' || item.status === 'scanning') return { ...item, status: 'incomplete' };
-          if (item.status !== 'complete') return item;
-          const unchecked = uncheckedByRepository.get(item.repository.id)?.size ?? 0;
-          return { ...item, message: unchecked ? `${unchecked} commits could not finish file checks. They are excluded while lockfile filtering is on.` : undefined };
-        });
-        setProgress([...states]); setScanning(false);
-        const partial = states.some(item => item.status !== 'complete');
-        const incompleteFiles = states.some(item => item.status === 'complete' && !!item.message);
-        const elapsed = (performance.now() - scanStarted) / 1000;
-        const duration = elapsed < 60 ? `${elapsed.toFixed(elapsed < 10 ? 1 : 0)}s` : `${Math.floor(elapsed / 60)}m ${Math.floor(elapsed % 60)}s`;
-        setScanMessage(task.signal.aborted ? 'Scan canceled. Results include only the history read so far.' : interrupted || partial ? 'Scan stopped with partial results. See repository coverage below.' : incompleteFiles ? 'History scan finished. Some file checks are incomplete; filtered totals omit those commits.' : `Scan finished in ${duration}.${reused ? ` ${formatNumber(reused)} verified commits reused.` : ''}`);
-        task.finish();
-      }
+      if (task.isCurrent()) { setScanning(false); task.finish(); }
     }
   }
+
   const preview = !authenticated && !sample && progress.length === 0;
   const result = useMemo(() => analyzeCommits(preview ? SAMPLE_COMMITS : commits, sample || preview ? SAMPLE_USER.id : session?.user?.id ?? '', cutoff, preview ? SAMPLE_AS_OF : asOf, preview ? completeSample : progress, { enabled: skipOversized, scope: 'both', excludeLockfiles }), [preview, commits, sample, session, cutoff, asOf, progress, skipOversized, excludeLockfiles]);
   const maxCutoff = sample || preview ? SAMPLE_AS_OF.slice(0, 10) : progress.length ? asOf.slice(0, 10) : today();
