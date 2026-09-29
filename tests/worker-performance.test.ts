@@ -1,9 +1,9 @@
 import { expect, it, vi } from 'vitest';
 import worker from '../worker/index';
 import type { Env } from '../worker/index';
-import type { ScanPage } from '../shared/types';
+import type { FileScanBatch, ScanPage } from '../shared/types';
 import { cookieName, seal, sign } from '../worker/security';
-import { FILE_RESPONSE_LIMIT } from '../worker/commit-files';
+import { FILE_BATCH_RESPONSE_LIMIT, FILE_RESPONSE_LIMIT } from '../worker/commit-files';
 
 /**
  * Bounded diagnostic benchmark. Measures local end-to-end wall time, NOT
@@ -122,5 +122,65 @@ it.skipIf(process.env.WORKER_BENCHMARK !== '1')('reports bounded local file-page
   process.stdout.write(`${JSON.stringify({ benchmark: 'file-page-local-wall-time', runtime: process.version, warmups: 10, iterations: samples.length,
     githubFixtureBytes: responseBytes, filesPerPage: 100, medianMs: Number(((samples[49] + samples[50]) / 2).toFixed(3)), p95Ms: Number(samples[94].toFixed(3)),
     note: 'Local wall-time proxy including synthetic upstream response creation; not measured Cloudflare CPU time.',
+  })}\n`);
+});
+
+it.skipIf(process.env.WORKER_BENCHMARK !== '1').each(['normal', 'near-cap', 'fallback'] as const)('reports local four-page batch timing: %s', async mode => {
+  const env: Env = {
+    APP_ORIGIN: 'https://benchmark.invalid', GITHUB_APP_SLUG: 'benchmark-only', GITHUB_CLIENT_ID: 'benchmark-only',
+    GITHUB_CLIENT_SECRET: 'not-a-real-secret', SESSION_SECRET: btoa('0123456789abcdef0123456789abcdef'),
+    ASSETS: { fetch: async () => new Response('unused') }, FILE_LIMITER: { limit: async () => ({ success: true }) },
+  };
+  const expiresAt = Math.floor(Date.now() / 1000) + 3600;
+  const user = { id: 'U_benchmark', login: 'benchmark-user', avatarUrl: 'https://avatars.githubusercontent.com/u/1' };
+  const session = await seal(env, 'session', { version: 1, sessionId: 'benchmark-session', user, token: 'ghu_not-a-real-token', csrfToken: 'benchmark-csrf', expiresAt });
+  const oids = ['a', 'b', 'c', 'd'].map(letter => letter.repeat(40));
+  const committedDate = '2025-12-01T00:00:00Z';
+  const handles = await Promise.all(oids.map(oid => sign(env, 'commit-files', {
+    version: 1, purpose: 'commit-files', sessionId: 'benchmark-session', githubUserId: user.id,
+    repositoryNodeId: 'R_benchmark', isPrivate: false, oid, additions: 100, deletions: 0, parentCount: 1,
+    committedDate, changedFiles: 100, page: 1, fileCount: 0, readAdditions: 0, readDeletions: 0, expiresAt,
+  })));
+  const metadata = JSON.stringify({ data: { node: { id: 'R_benchmark', nameWithOwner: 'benchmark-user/project', isPrivate: false, isFork: false } } });
+  const bodies = new Map(oids.map(oid => {
+    const value = { sha: oid, author: { node_id: user.id }, parents: [{}], commit: { committer: { date: committedDate } }, stats: { additions: 100, deletions: 0, total: 100 },
+      files: Array.from({ length: 100 }, (_, index) => ({ filename: `src/file-${index}.ts`, status: 'modified', additions: 1, deletions: 0, patch: '' })),
+    };
+    if (mode !== 'normal') value.files[0].patch = 'x'.repeat(FILE_BATCH_RESPONSE_LIMIT + (mode === 'fallback' ? 16 : -16) - new TextEncoder().encode(JSON.stringify(value)).byteLength);
+    return [oid, JSON.stringify(value)];
+  }));
+  const responseBytes = new TextEncoder().encode(bodies.get(oids[0])!).byteLength;
+  expect(responseBytes).toBe(mode === 'normal' ? responseBytes : FILE_BATCH_RESPONSE_LIMIT + (mode === 'fallback' ? 16 : -16));
+  const originalFetch = globalThis.fetch;
+  vi.stubGlobal('fetch', async (url: string | URL | Request) => String(url).endsWith('/graphql')
+    ? new Response(metadata, { headers: { 'Content-Type': 'application/json' } })
+    : new Response(bodies.get(/\/commits\/([a-f0-9]+)\?/.exec(String(url))![1]), { headers: { 'Content-Type': 'application/json', 'x-ratelimit-remaining': '4000', 'x-ratelimit-reset': '1790812800' } }));
+  const samples: number[] = [];
+  try {
+    for (let iteration = 0; iteration < 110; iteration++) {
+      const request = new Request(`${env.APP_ORIGIN}/api/scan/files/batch`, { method: 'POST', headers: {
+        Origin: env.APP_ORIGIN, 'Content-Type': 'application/json', 'x-csrf-token': 'benchmark-csrf', Cookie: `${cookieName(env, 'session')}=${session}`,
+      }, body: JSON.stringify({ handles }) });
+      const started = performance.now();
+      const response = await worker.fetch(request, env);
+      const output = await response.json() as FileScanBatch;
+      const elapsed = performance.now() - started;
+      expect(response.status).toBe(200);
+      expect(output.results).toHaveLength(4);
+      for (const result of output.results) {
+        if (mode === 'fallback') expect(result).toMatchObject({ error: { code: 'file_batch_retry_single' } });
+        else {
+          expect(result).toMatchObject({ page: { complete: true, nextHandle: null } });
+          if ('page' in result) expect(result.page.files).toHaveLength(100);
+        }
+      }
+      if (iteration >= 10) samples.push(elapsed);
+    }
+  } finally { vi.stubGlobal('fetch', originalFetch); }
+  samples.sort((a, b) => a - b);
+  process.stdout.write(`${JSON.stringify({ benchmark: `file-batch-${mode}-local-wall-time`, runtime: process.version, platform: `${process.platform}/${process.arch}`,
+    warmups: 10, iterations: samples.length, pages: 4, upstreamBytesPerPage: responseBytes, aggregateUpstreamBytes: responseBytes * 4,
+    medianMs: Number(((samples[49] + samples[50]) / 2).toFixed(3)), p95Ms: Number(samples[94].toFixed(3)),
+    note: 'Local wall-time proxy with mocked GitHub and rate limiter; not measured Cloudflare CPU time.',
   })}\n`);
 });

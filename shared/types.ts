@@ -7,9 +7,10 @@ export interface AnalyzedCommit extends CommitRecord { countedAdditions: number;
 export interface RepositoryPage { repositories: Repository[]; cursor: string | null; hasNextPage: boolean }
 export interface Installation { id: number; login: string }
 export interface InstallationsPage { installations: Installation[]; nextPage: number | null }
-export interface ScanStart { handle: string | null; repository: Repository; empty: boolean }
+export interface ScanStart { handle: string | null; repository: Repository; empty: boolean; initialPage?: ScanPage }
 export interface ScanPage { commits: CommitRecord[]; nextHandle: string | null; remaining: number; resetAt: string }
 export interface FileScanPage { oid: string; files: CommitFile[]; nextHandle: string | null; complete: boolean; remaining: number; resetAt: string }
+export interface FileScanBatch { results: ({ oid: string; page: FileScanPage } | { oid: string; error: { code: string; message: string; retryAfter?: number } })[] }
 export type RepositoryStatus = 'pending' | 'scanning' | 'complete' | 'unavailable' | 'incomplete';
 export interface RepositoryProgress { repository: Repository; status: RepositoryStatus; commits: number; message?: string }
 export interface Totals { additions: number; deletions: number; commits: number }

@@ -1,9 +1,9 @@
-import type { CommitRecord, Installation, Repository, RepositoryPage, SessionInfo, Viewer } from '../shared/types';
+import type { CommitRecord, Installation, Repository, RepositoryPage, ScanPage, SessionInfo, Viewer } from '../shared/types';
 import { isNonForkRepository } from '../shared/repository-policy';
-import { ApiError, CONTRIBUTED_QUERY, externalFetch, github, ORGANIZATION_QUERY, OWNED_QUERY, PUBLIC_REPOSITORY_QUERY, SCAN_QUERY, SNAPSHOT_QUERY, VIEWER_QUERY } from './github';
+import { ApiError, CONTRIBUTED_QUERY, externalFetch, github, ORGANIZATION_QUERY, OWNED_QUERY, PUBLIC_REPOSITORY_QUERY, SCAN_QUERY, SNAPSHOT_QUERY, SNAPSHOT_WITH_HISTORY_QUERY, VIEWER_QUERY } from './github';
 import { challenge, cookie, decode, origin, randomString, readCookie, seal, sign, unseal, verify } from './security';
 import { publicShare, publicShareError, publishShare, SHARE_BODY_LIMIT, type ShareStore } from './sharing';
-import { addFileHandles, scanCommitFiles } from './commit-files';
+import { addFileHandles, FILE_BATCH_BODY_LIMIT, scanCommitFiles, scanCommitFilesBatch } from './commit-files';
 
 export interface Env {
   SESSION_SECRET: string;
@@ -27,7 +27,10 @@ interface PageInfo { hasNextPage: boolean; endCursor: string | null }
 interface RepoConnection { nodes: Repository[]; pageInfo: PageInfo }
 interface RestRepository { node_id: string; full_name: string; private: boolean; fork: boolean; archived: boolean; description: string | null }
 interface GithubCommit { oid: string; additions: number; deletions: number; committedDate: string; messageHeadline: string; changedFilesIfAvailable: number | null; author: { user: { id: string } | null } | null; parents: { totalCount: number } }
-interface ScanData { node: { isPrivate: boolean; isFork: boolean; object: { history: { nodes: GithubCommit[]; pageInfo: PageInfo } } | null } | null; rateLimit: { remaining: number; resetAt: string } }
+interface ScanHistory { nodes: GithubCommit[]; pageInfo: PageInfo }
+interface ScanRateLimit { remaining: number; resetAt: string }
+interface ScanData { node: { isPrivate: boolean; isFork: boolean; object: { history: ScanHistory } | null } | null; rateLimit: ScanRateLimit }
+interface SnapshotData { node: (Repository & { defaultBranchRef: { target: { oid: string; history?: ScanHistory } } | null }) | null; rateLimit?: ScanRateLimit }
 
 const now = () => Math.floor(Date.now() / 1000);
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' } });
@@ -244,14 +247,28 @@ async function startScan(env: Env, session: Session, input: Record<string, unkno
   const timestamp = Date.parse(asOf);
   if (!Number.isFinite(timestamp) || timestamp < 0 || timestamp > Date.now() + 60000) throw new ApiError(400, 'invalid_request', 'The scan date is invalid.');
   if (typeof input.includePrivate !== 'boolean') throw new ApiError(400, 'invalid_request', 'Confirm which repositories to include.');
-  const { data } = await github<{ node: (Repository & { defaultBranchRef: { target: { oid: string } } | null }) | null }>(session.token, '/graphql', { query: SNAPSHOT_QUERY, variables: { id } });
-  if (!data.node?.id || !data.node.nameWithOwner) throw new ApiError(403, 'repository_unavailable', 'This repository is unavailable to your GitHub connection.');
+  if (input.includeFirstPage !== undefined && typeof input.includeFirstPage !== 'boolean') throw new ApiError(400, 'invalid_request', 'The first-page option is invalid.');
+  const includeFirstPage = input.includeFirstPage === true;
+  const snapshotTime = new Date(timestamp).toISOString();
+  const { data } = await github<SnapshotData>(session.token, '/graphql', {
+    query: includeFirstPage ? SNAPSHOT_WITH_HISTORY_QUERY : SNAPSHOT_QUERY,
+    variables: includeFirstPage ? { id, author: session.user.id, until: snapshotTime } : { id },
+    maxResponseBytes: 256 * 1024,
+  });
+  if (!data.node?.id || data.node.id !== id || !data.node.nameWithOwner) throw new ApiError(403, 'repository_unavailable', 'This repository is unavailable to your GitHub connection.');
   requireNonForkRepository(data.node);
+  if (typeof data.node.isPrivate !== 'boolean') throw new ApiError(502, 'github_incomplete', 'GitHub could not confirm the repository visibility. Please retry.');
   if (data.node.isPrivate && !input.includePrivate) throw new ApiError(403, 'private_consent_required', 'Select private repositories explicitly before scanning them.');
   const { defaultBranchRef, ...repository } = data.node;
-  if (!defaultBranchRef) return json({ handle: null, repository, empty: true });
-  if (!/^[a-f0-9]{40,64}$/.test(defaultBranchRef.target?.oid ?? '')) throw new ApiError(502, 'github_incomplete', 'GitHub could not resolve the default branch. Please retry.');
-  const handle: ScanHandle = { version: 1, purpose: 'scan-page', sessionId: session.sessionId, githubUserId: session.user.id, repositoryNodeId: id, headOid: defaultBranchRef.target.oid, isPrivate: repository.isPrivate, after: null, asOf: new Date(timestamp).toISOString(), expiresAt: session.expiresAt };
+  if (defaultBranchRef === null) return json({ handle: null, repository, empty: true });
+  if (!defaultBranchRef || !/^[a-f0-9]{40,64}$/.test(defaultBranchRef.target?.oid ?? '')) throw new ApiError(502, 'github_incomplete', 'GitHub could not resolve the default branch. Please retry.');
+  const handle: ScanHandle = { version: 1, purpose: 'scan-page', sessionId: session.sessionId, githubUserId: session.user.id, repositoryNodeId: id, headOid: defaultBranchRef.target.oid, isPrivate: repository.isPrivate, after: null, asOf: snapshotTime, expiresAt: session.expiresAt };
+  if (includeFirstPage) {
+    // HEAD and its first history page come from the same query. Continuations
+    // remain bound to that immutable HEAD even when the default branch advances.
+    const initialPage = await createScanPage(env, session, handle, defaultBranchRef.target.history, data.rateLimit);
+    return json({ handle: initialPage.nextHandle, repository, empty: false, initialPage });
+  }
   return json({ handle: await sign(env, 'scan-page', handle), repository, empty: false });
 }
 
@@ -266,8 +283,14 @@ async function scanPage(env: Env, session: Session, input: Record<string, unknow
   if (data.node) requireNonForkRepository(data.node);
   if (data.node?.isPrivate && !handle.isPrivate) throw new ApiError(403, 'repository_visibility_changed', 'This repository became private during the scan. Select it from your private repositories and start a new scan.');
   if (data.node && typeof data.node.isPrivate !== 'boolean') throw new ApiError(502, 'github_incomplete', 'GitHub could not confirm the repository visibility. Please retry this page.');
-  const history = data.node?.object?.history;
-  if (!history || !Array.isArray(history.nodes) || !history.pageInfo || (history.pageInfo.hasNextPage && (!history.pageInfo.endCursor || history.pageInfo.endCursor === handle.after))) throw new ApiError(502, 'github_incomplete', 'GitHub could not read this snapshot. Retry, or start a new scan.');
+  return json(await createScanPage(env, session, handle, data.node?.object?.history, data.rateLimit));
+}
+
+async function createScanPage(
+  env: Env, session: Session, handle: ScanHandle,
+  history: ScanHistory | undefined, rateLimit: ScanRateLimit | undefined,
+): Promise<ScanPage> {
+  if (!history || !Array.isArray(history.nodes) || !history.pageInfo || typeof history.pageInfo.hasNextPage !== 'boolean' || (history.pageInfo.hasNextPage && (typeof history.pageInfo.endCursor !== 'string' || !history.pageInfo.endCursor || history.pageInfo.endCursor.length > 2048 || history.pageInfo.endCursor === handle.after))) throw new ApiError(502, 'github_incomplete', 'GitHub could not read this snapshot. Retry, or start a new scan.');
   if (history.nodes.length > 100) throw new ApiError(502, 'github_incomplete', 'GitHub returned too many commits in this page. Please retry.');
   const records: CommitRecord[] = history.nodes.map((commit) => {
     if (!/^[a-f0-9]{40,64}$/.test(commit?.oid ?? '') || !Number.isSafeInteger(commit.additions) || commit.additions < 0 || !Number.isSafeInteger(commit.deletions) || commit.deletions < 0 || !Number.isSafeInteger(commit.parents?.totalCount) || commit.parents.totalCount < 0 || !Number.isFinite(Date.parse(commit.committedDate)) || (commit.changedFilesIfAvailable != null && (!Number.isSafeInteger(commit.changedFilesIfAvailable) || commit.changedFilesIfAvailable < 0))) throw new ApiError(502, 'github_incomplete', 'GitHub returned incomplete commit statistics. Please retry this page.');
@@ -275,10 +298,10 @@ async function scanPage(env: Env, session: Session, input: Record<string, unknow
   // Commit.author is the primary Git author. Commit.authors can also contain
   // Co-authored-by trailers; being a coauthor or committer does not qualify.
   }).filter(commit => commit.authorId === session.user.id);
-  if (!data.rateLimit || !Number.isFinite(data.rateLimit.remaining) || !Number.isFinite(Date.parse(data.rateLimit.resetAt))) throw new ApiError(502, 'github_incomplete', 'GitHub returned incomplete rate-limit information. Please retry this page.');
+  if (!rateLimit || !Number.isSafeInteger(rateLimit.remaining) || rateLimit.remaining < 0 || !Number.isFinite(Date.parse(rateLimit.resetAt))) throw new ApiError(502, 'github_incomplete', 'GitHub returned incomplete rate-limit information. Please retry this page.');
   const commits = await addFileHandles(env, session, handle, records);
   const nextHandle = history.pageInfo.hasNextPage ? await sign(env, 'scan-page', { ...handle, after: history.pageInfo.endCursor }) : null;
-  return json({ commits, nextHandle, remaining: data.rateLimit.remaining, resetAt: data.rateLimit.resetAt });
+  return { commits, nextHandle, remaining: rateLimit.remaining, resetAt: rateLimit.resetAt };
 }
 
 async function route(request: Request, env: Env, url: URL): Promise<Response> {
@@ -304,6 +327,19 @@ async function route(request: Request, env: Env, url: URL): Promise<Response> {
     await enforceLimit(env.FILE_LIMITER, `files:user:${session.user.id}`);
     await enforceLimit(env.FILE_LIMITER, `files:ip:${request.headers.get('CF-Connecting-IP') ?? 'unknown'}`);
     return json(await scanCommitFiles(env, session, await body(request)));
+  }
+  if (path === '/api/scan/files/batch' && request.method === 'POST') {
+    // Invalid authenticated payloads still consume one unit, as on the single route.
+    await enforceLimit(env.FILE_LIMITER, `files:user:${session.user.id}`);
+    await enforceLimit(env.FILE_LIMITER, `files:ip:${request.headers.get('CF-Connecting-IP') ?? 'unknown'}`);
+    return json(await scanCommitFilesBatch(env, session, await body(request, FILE_BATCH_BODY_LIMIT), async pages => {
+      // The allowance counts upstream file pages, not batch envelopes. Charge
+      // remaining pages before GitHub access; a partially charged refusal stays safe.
+      for (let index = 1; index < pages; index++) {
+        await enforceLimit(env.FILE_LIMITER, `files:user:${session.user.id}`);
+        await enforceLimit(env.FILE_LIMITER, `files:ip:${request.headers.get('CF-Connecting-IP') ?? 'unknown'}`);
+      }
+    }));
   }
   await enforceLimit(env.API_LIMITER, `user:${session.user.id}`);
   if (path === '/api/share' && request.method === 'POST') {

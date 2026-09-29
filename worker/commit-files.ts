@@ -1,8 +1,11 @@
-import type { CommitFile, CommitRecord, FileScanPage } from '../shared/types';
+import type { CommitFile, CommitRecord, FileScanBatch, FileScanPage } from '../shared/types';
 import { ApiError, FILE_REPOSITORY_QUERY, github } from './github';
 import { createSigner, sign, verify, type CryptoEnvironment } from './security';
 
 export const FILE_RESPONSE_LIMIT = 2 * 1024 * 1024;
+export const FILE_BATCH_RESPONSE_LIMIT = 384 * 1024;
+export const FILE_BATCH_BODY_LIMIT = 32 * 1024;
+export const FILE_BATCH_SIZE = 4;
 const FILES_PER_PAGE = 100;
 const MAX_FILES = 3000;
 const PURPOSE = 'commit-files';
@@ -105,10 +108,8 @@ function sanitizeFiles(data: RestCommit): CommitFile[] {
   });
 }
 
-export async function scanCommitFiles(env: CryptoEnvironment, session: FileSession, input: Record<string, unknown>): Promise<FileScanPage> {
-  const handle = await readHandle(env, session, input);
-  // File counts are required to detect truncation, including omitted zero-line binary changes.
-  if (handle.changedFiles === null || handle.changedFiles > MAX_FILES) throw unavailable();
+async function readRepository(session: FileSession, handles: FileHandle[]): Promise<LiveRepository> {
+  const handle = handles[0];
   const { data: metadata } = await github<{ node: LiveRepository | null }>(session.token, '/graphql', {
     query: FILE_REPOSITORY_QUERY, variables: { id: handle.repositoryNodeId }, maxResponseBytes: 16 * 1024,
   });
@@ -117,19 +118,29 @@ export async function scanCommitFiles(env: CryptoEnvironment, session: FileSessi
   if (repository.id !== handle.repositoryNodeId || typeof repository.isPrivate !== 'boolean' || typeof repository.isFork !== 'boolean') throw unavailable();
   if (repository.databaseId != null && (!integer(repository.databaseId) || repository.databaseId < 1)) throw unavailable();
   if (repository.isFork) throw new ApiError(403, 'forks_excluded', 'Forked repositories are excluded from AI Diff. Choose a non-fork repository.');
-  if (repository.isPrivate && !handle.isPrivate) throw new ApiError(403, 'repository_visibility_changed', 'This repository became private. Select it from your private repositories and start a new scan.');
+  if (repository.isPrivate && handles.some(item => !item.isPrivate)) throw new ApiError(403, 'repository_visibility_changed', 'This repository became private. Select it from your private repositories and start a new scan.');
   const name = /^([A-Za-z0-9-]{1,39})\/([A-Za-z0-9_.-]{1,100})$/.exec(repository.nameWithOwner);
   if (!name || name[2] === '.' || name[2] === '..') throw unavailable();
-  const pathname = `/repos/${encodeURIComponent(name[1])}/${encodeURIComponent(name[2])}/commits/${handle.oid}`;
+  return repository;
+}
+
+async function readFilePage(env: CryptoEnvironment, session: FileSession, handle: FileHandle, repository: LiveRepository, maximum: number): Promise<FileScanPage> {
+  // File counts are required to detect truncation, including omitted zero-line binary changes.
+  if (handle.changedFiles === null || handle.changedFiles > MAX_FILES) throw unavailable();
+  const name = repository.nameWithOwner.split('/');
+  const pathname = `/repos/${encodeURIComponent(name[0])}/${encodeURIComponent(name[1])}/commits/${handle.oid}`;
   // GitHub's real pagination links use this numeric repository route. Accept
   // only the ID just resolved from the signed node; still construct our own
   // named request path below instead of following any returned URL.
   const canonicalPathname = repository.databaseId == null ? null : `/repositories/${repository.databaseId}/commits/${handle.oid}`;
   let result: { data: RestCommit; response: Response };
   try {
-    result = await github<RestCommit>(session.token, `${pathname}?per_page=${FILES_PER_PAGE}&page=${handle.page}`, { maxResponseBytes: FILE_RESPONSE_LIMIT });
+    result = await github<RestCommit>(session.token, `${pathname}?per_page=${FILES_PER_PAGE}&page=${handle.page}`, { maxResponseBytes: maximum });
   } catch (error) {
-    if (error instanceof ApiError && error.code === 'github_response_too_large') throw unavailable();
+    if (error instanceof ApiError && error.code === 'github_response_too_large') {
+      if (maximum < FILE_RESPONSE_LIMIT) throw new ApiError(413, 'file_batch_retry_single', 'This file page needs a separate request. Retry the same handle with the single-file endpoint.');
+      throw unavailable();
+    }
     throw error;
   }
   const { data, response } = result;
@@ -159,4 +170,39 @@ export async function scanCommitFiles(env: CryptoEnvironment, session: FileSessi
     ...handle, page: next, fileCount: count, readAdditions: additions, readDeletions: deletions,
   } satisfies FileHandle);
   return { oid: handle.oid, files, nextHandle, complete: next === null, remaining, resetAt: new Date(reset * 1000).toISOString() };
+}
+
+export async function scanCommitFiles(env: CryptoEnvironment, session: FileSession, input: Record<string, unknown>): Promise<FileScanPage> {
+  const handle = await readHandle(env, session, input);
+  if (handle.changedFiles === null || handle.changedFiles > MAX_FILES) throw unavailable();
+  return readFilePage(env, session, handle, await readRepository(session, [handle]), FILE_RESPONSE_LIMIT);
+}
+
+export async function scanCommitFilesBatch(
+  env: CryptoEnvironment, session: FileSession, input: Record<string, unknown>,
+  charge?: (pages: number) => Promise<void>,
+): Promise<FileScanBatch> {
+  if (Object.keys(input).length !== 1 || !Array.isArray(input.handles) || input.handles.length < 1 || input.handles.length > FILE_BATCH_SIZE) {
+    throw new ApiError(400, 'invalid_file_scan', 'Send one to four signed file handles from the same repository.');
+  }
+  // Verify the entire request before reading any repository or commit. A SHA
+  // appears only once in a batch, including when handles refer to different pages.
+  const handles = await Promise.all(input.handles.map(handle => readHandle(env, session, { handle })));
+  if (new Set(handles.map(handle => handle.oid)).size !== handles.length || handles.some(handle => handle.repositoryNodeId !== handles[0].repositoryNodeId)) {
+    throw new ApiError(400, 'invalid_file_scan', 'Use distinct commits from the same repository in each file batch.');
+  }
+  await charge?.(handles.length);
+  const repository = await readRepository(session, handles);
+  // Four bounded bodies use at most 1.5 MiB of JSON parsing per invocation.
+  // A heavy page is retried by itself with the existing 2 MiB limit.
+  const pages = await Promise.allSettled(handles.map(handle => readFilePage(env, session, handle, repository, FILE_BATCH_RESPONSE_LIMIT)));
+  for (const page of pages) {
+    if (page.status === 'rejected' && page.reason instanceof ApiError && ['authentication_required', 'session_expired', 'repository_unavailable', 'repository_visibility_changed', 'forks_excluded'].includes(page.reason.code)) throw page.reason;
+  }
+  return { results: pages.map((page, index) => {
+    const oid = handles[index].oid;
+    if (page.status === 'fulfilled') return { oid, page: page.value };
+    const error = page.reason instanceof ApiError ? page.reason : new ApiError(502, 'github_unavailable', 'GitHub could not complete this file request. Please retry.');
+    return { oid, error: { code: error.code, message: error.message, ...(error.retryAfter ? { retryAfter: error.retryAfter } : {}) } };
+  }) };
 }

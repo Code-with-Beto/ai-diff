@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Check, ChevronDown, CircleHelp, Github, LockKeyhole, LogOut, Plus, Search, Square, X } from 'lucide-react';
-import type { AnalysisResult, CommitRecord, InstallationsPage, Repository, RepositoryPage, RepositoryProgress, FileScanPage, ScanPage, ScanStart, SessionInfo, ShareResult } from '../shared/types';
+import type { AnalysisResult, CommitRecord, InstallationsPage, Repository, RepositoryPage, RepositoryProgress, FileScanBatch, FileScanPage, ScanPage, ScanStart, SessionInfo, ShareResult } from '../shared/types';
 import { ApiError, api, waitForRetry } from './api';
 import { analyzeCommits, formatDate, formatNumber } from './lib/analysis';
 import { SAMPLE_AS_OF, SAMPLE_COMMITS, SAMPLE_REPOSITORIES, SAMPLE_USER } from './lib/sample';
 import { createShareResult, decodeShare, describeAdditionChange } from './lib/share';
 import { readPublishedShare } from './lib/published-share';
-import { inspectCommitFiles } from './lib/file-scan';
+import { inspectFileBatches } from './lib/file-batches';
+import { InspectionCache } from './lib/inspection-cache';
 import { isNonForkRepository } from '../shared/repository-policy';
 import { callbackMessage, comparisonDateAllowed, createOperationScope, isAuthenticationError, parseRepositorySource } from './lib/client-state';
 import About from './components/About';
@@ -95,9 +96,11 @@ export default function App() {
   const operations = useRef(createOperationScope());
   const repositorySearch = useRef<HTMLInputElement>(null);
   const knownRepositories = useRef(new Set<string>());
+  const inspectionCache = useRef(new InspectionCache());
   const authenticated = !!session?.authenticated;
 
-  useEffect(() => () => operations.current.invalidateAll(), []);
+  useEffect(() => () => { operations.current.invalidateAll(); inspectionCache.current.clear(); }, []);
+  useEffect(() => { inspectionCache.current.forAccount(authenticated ? session?.user?.id ?? null : null); }, [authenticated, session?.user?.id]);
   useEffect(() => {
     if (!isShared || published) return;
     const changed = () => { setShare(null); setSharedResult(decodeShare(window.location.hash)); };
@@ -127,6 +130,7 @@ export default function App() {
   }
   function expireSession() {
     stopOperations();
+    inspectionCache.current.clear();
     setSession(previous => previous ? { ...previous, authenticated: false, csrfToken: undefined } : { configured: true, authenticated: false });
     setConnectionExpired(true);
     setProgress(previous => previous.map(item => item.status === 'pending' || item.status === 'scanning' ? { ...item, status: 'incomplete' } : item));
@@ -247,7 +251,7 @@ export default function App() {
   async function disconnect() {
     const csrf = session?.csrfToken;
     const configured = session?.configured ?? true;
-    stopOperations(); resetReport(); setSample(false); setIncludePrivate(false); setConnectionExpired(false); setError('');
+    stopOperations(); inspectionCache.current.clear(); resetReport(); setSample(false); setIncludePrivate(false); setConnectionExpired(false); setError('');
     // Clear local account data immediately, including when remote token revocation fails.
     setSession({ configured, authenticated: false });
     const task = operations.current.start('logout');
@@ -262,25 +266,35 @@ export default function App() {
     const chosen = repositories.filter(repo => isNonForkRepository(repo) && selected.has(repo.id) && (!repo.isPrivate || includePrivate));
     if (!chosen.length) return;
     const task = operations.current.start('scan');
+    const scanStarted = performance.now();
     const snapshotTime = new Date().toISOString();
     setAsOf(snapshotTime); setCommits([]); setError(''); setScanning(true); setScanMessage('Starting your analysis…');
     let states: RepositoryProgress[] = chosen.map(repository => ({ repository, status: 'pending', commits: 0 }));
     setProgress([...states]);
     let allCommits: CommitRecord[] = [];
     const inspectedBySha = new Map<string, CommitRecord>();
+    inspectionCache.current.forAccount(session?.user?.id ?? null);
+    let reused = 0;
+    let lastPublish = 0;
+    function publish(force = false) {
+      if (task.isCurrent() && (force || performance.now() - lastPublish >= 250)) {
+        setCommits([...allCommits]); lastPublish = performance.now();
+      }
+    }
     let interrupted = false;
     function update(index: number, patch: Partial<RepositoryProgress>) {
       if (!task.isCurrent()) return;
       states[index] = { ...states[index], ...patch }; setProgress(states.filter(item => isNonForkRepository(item.repository)));
     }
     async function request<T>(path: string, body: unknown): Promise<T> {
+      let retries = 0;
       for (;;) {
         if (!task.isActive()) throw new DOMException('Aborted', 'AbortError');
         try { return await api<T>(path, { body, csrf: session?.csrfToken, signal: task.signal }); }
         catch (value) {
           if (!task.isActive()) throw value;
-          if (value instanceof ApiError && value.code === 'rate_limited' && value.retryAfter && value.retryAfter > 0) {
-            const delay = Math.min(value.retryAfter, 3600) * 1000;
+          if (value instanceof ApiError && value.code === 'rate_limited' && value.retryAfter && value.retryAfter > 0 && retries < 4) {
+            const delay = Math.max(value.retryAfter, 60 * 2 ** retries++) * 1000;
             setScanMessage(`GitHub needs a pause. Continuing after ${new Date(Date.now() + delay).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}. You can cancel anytime.`);
             await waitForRetry(delay, task.signal);
           } else throw value;
@@ -293,36 +307,52 @@ export default function App() {
         const repositoryCommitStart = allCommits.length;
         const repo = chosen[index]; let fileFailures = 0; update(index, { status: 'scanning' }); setScanMessage(`Reading ${repo.nameWithOwner}`);
         try {
-          const start = await request<ScanStart>('/api/scan/start', { repositoryId: repo.id, includePrivate, asOf: snapshotTime });
+          const start = await request<ScanStart>('/api/scan/start', { repositoryId: repo.id, includePrivate, asOf: snapshotTime, includeFirstPage: true });
           if (!task.isActive()) break;
           if (!isNonForkRepository(start.repository)) throw new ApiError({ code: 'forks_excluded', message: 'Forks are excluded.' });
           update(index, { repository: start.repository });
           let handle = start.handle;
-          while (handle && task.isActive()) {
-            const page = await request<ScanPage>('/api/scan/page', { handle });
+          let firstPage = start.initialPage;
+          while ((handle || firstPage) && task.isActive()) {
+            const page = firstPage ?? await request<ScanPage>('/api/scan/page', { handle });
+            firstPage = undefined;
             if (!task.isActive()) break;
             const received = page.commits.map(commit => ({ ...commit, repository: { id: start.repository.id, nameWithOwner: start.repository.nameWithOwner, isPrivate: start.repository.isPrivate } }));
             const offset = allCommits.length;
-            allCommits = allCommits.concat(received); setCommits([...allCommits]);
-            for (let position = 0; position < received.length && task.isActive(); position++) {
+            allCommits.push(...received);
+            const unchecked: CommitRecord[] = [];
+            const positions = new Map<string, number[]>();
+            for (let position = 0; position < received.length; position++) {
               const commit = received[position];
               if (commit.parentCount > 1 || commit.authorId !== session?.user?.id) continue;
-              setScanMessage(`Checking files in ${repo.nameWithOwner} · ${formatNumber(inspectedBySha.size)} commits checked`);
-              try {
-                const previous = inspectedBySha.get(commit.oid);
-                const inspected = previous?.filesComplete
-                  ? { ...commit, files: previous.files, filesComplete: true }
-                  : await inspectCommitFiles(commit, fileHandle => request<FileScanPage>('/api/scan/files', { handle: fileHandle }), task.signal);
-                inspectedBySha.set(commit.oid, inspected);
-                allCommits[offset + position] = inspected;
-              } catch (value) {
-                if (!task.isActive() || isAuthenticationError(value) || (value instanceof ApiError && ['invalid_scan', 'invalid_file_scan', 'forks_excluded', 'repository_visibility_changed', 'repository_unavailable'].includes(value.code))) throw value;
-                fileFailures += 1;
-                allCommits[offset + position] = { ...commit, filesComplete: false, filesError: value instanceof Error ? value.message : 'File statistics unavailable.' };
+              const cached = inspectionCache.current.get(commit);
+              if (cached) {
+                allCommits[offset + position] = cached; inspectedBySha.set(commit.oid, cached); reused += 1;
+              } else {
+                const duplicates = positions.get(commit.oid);
+                if (duplicates) duplicates.push(offset + position);
+                else { positions.set(commit.oid, [offset + position]); unchecked.push(commit); }
               }
-              if (task.isActive()) setCommits([...allCommits]);
             }
+            publish();
+            setScanMessage(`Checking files in ${repo.nameWithOwner} · ${formatNumber(inspectedBySha.size)} commits checked${reused ? ` · ${formatNumber(reused)} reused` : ''}`);
+            await inspectFileBatches(unchecked, {
+              batch: handles => api<FileScanBatch>('/api/scan/files/batch', { body: { handles }, csrf: session?.csrfToken, signal: task.signal }),
+              single: fileHandle => api<FileScanPage>('/api/scan/files', { body: { handle: fileHandle }, csrf: session?.csrfToken, signal: task.signal }),
+              pause: async (delay, reason) => {
+                setScanMessage(reason === 'rate' ? `GitHub needs a pause. Continuing after ${new Date(Date.now() + delay).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}. You can cancel anytime.` : 'Retrying a temporary GitHub error…');
+                await waitForRetry(delay, task.signal);
+              },
+            }, task.signal, (_position, inspected) => {
+              if (!task.isActive()) return;
+              if (inspected.filesComplete) { inspectedBySha.set(inspected.oid, inspected); inspectionCache.current.put(inspected); }
+              else fileFailures += 1;
+              for (const position of positions.get(inspected.oid) ?? []) allCommits[position] = { ...allCommits[position], files: inspected.files, filesComplete: inspected.filesComplete, filesError: inspected.filesError };
+              publish();
+              setScanMessage(`Checking files in ${repo.nameWithOwner} · ${formatNumber(inspectedBySha.size)} commits checked${reused ? ` · ${formatNumber(reused)} reused` : ''}`);
+            });
             if (!task.isActive()) break;
+            publish(true);
             update(index, { commits: states[index].commits + page.commits.length });
             handle = page.nextHandle;
             setScanMessage(`Reading ${repo.nameWithOwner} · ${formatNumber(allCommits.length)} commits received`);
@@ -348,20 +378,30 @@ export default function App() {
           update(index, { status: states[index].commits ? 'incomplete' : 'unavailable', message });
           if (isAuthenticationError(value)) { interrupted = true; expireSession(); break; }
           if (value instanceof ApiError && ['invalid_scan', 'invalid_file_scan'].includes(value.code)) { interrupted = true; setError('This scan expired. Start a new scan to continue.'); break; }
+          if (value instanceof ApiError && ['rate_limited', 'invalid_request'].includes(value.code)) { interrupted = true; setError(value.code === 'rate_limited' ? 'GitHub is still limiting this scan. Try again later; completed file checks can be reused in this tab.' : value.message); break; }
         }
       }
     } finally {
       if (task.isCurrent()) {
+        publish(true);
+        const uncheckedByRepository = new Map<string, Set<string>>();
+        for (const commit of allCommits) {
+          if (!commit.repository || commit.parentCount > 1 || commit.authorId !== session?.user?.id || inspectedBySha.get(commit.oid)?.filesComplete) continue;
+          const unchecked = uncheckedByRepository.get(commit.repository.id) ?? new Set<string>();
+          unchecked.add(commit.oid); uncheckedByRepository.set(commit.repository.id, unchecked);
+        }
         states = states.filter(item => isNonForkRepository(item.repository)).map(item => {
           if (item.status === 'pending' || item.status === 'scanning') return { ...item, status: 'incomplete' };
           if (item.status !== 'complete') return item;
-          const unchecked = new Set(allCommits.filter(commit => commit.repository?.id === item.repository.id && commit.parentCount <= 1 && commit.authorId === session?.user?.id && !inspectedBySha.get(commit.oid)?.filesComplete).map(commit => commit.oid)).size;
+          const unchecked = uncheckedByRepository.get(item.repository.id)?.size ?? 0;
           return { ...item, message: unchecked ? `${unchecked} commits could not finish file checks. They are excluded while lockfile filtering is on.` : undefined };
         });
         setProgress([...states]); setScanning(false);
         const partial = states.some(item => item.status !== 'complete');
         const incompleteFiles = states.some(item => item.status === 'complete' && !!item.message);
-        setScanMessage(task.signal.aborted ? 'Scan canceled. Results include only the history read so far.' : interrupted || partial ? 'Scan stopped with partial results. See repository coverage below.' : incompleteFiles ? 'History scan finished. Some file checks are incomplete; filtered totals omit those commits.' : 'Scan finished.');
+        const elapsed = (performance.now() - scanStarted) / 1000;
+        const duration = elapsed < 60 ? `${elapsed.toFixed(elapsed < 10 ? 1 : 0)}s` : `${Math.floor(elapsed / 60)}m ${Math.floor(elapsed % 60)}s`;
+        setScanMessage(task.signal.aborted ? 'Scan canceled. Results include only the history read so far.' : interrupted || partial ? 'Scan stopped with partial results. See repository coverage below.' : incompleteFiles ? 'History scan finished. Some file checks are incomplete; filtered totals omit those commits.' : `Scan finished in ${duration}.${reused ? ` ${formatNumber(reused)} verified commits reused.` : ''}`);
         task.finish();
       }
     }
@@ -406,7 +446,7 @@ export default function App() {
       {sample ? <div className="sample-account"><p>Exploring a fictional account.</p><button className="text-button" onClick={exitSample}>Exit sample</button></div> : authenticated ? <div className="connected-account"><Github size={22} /><div><strong>{session?.user?.login}</strong><span><Check size={12} />Connected</span></div></div> : <><a href="/api/auth/github/start" className={`button primary connect-button ${!session?.configured ? 'disabled' : ''}`} aria-disabled={!session?.configured} onClick={e => { if (!session?.configured) e.preventDefault(); }}><Github size={18} />{connectionExpired ? 'Reconnect GitHub' : 'Connect GitHub'}</a><p className="permission-note">Read-only. Private repos optional.</p>{session && !session.configured && <p className="setup-notice">GitHub isn’t configured locally. Try the sample.</p>}{sessionFailed && <p className="setup-notice">Connection unavailable. <button className="text-button" onClick={() => window.location.reload()}>Retry</button></p>}<button className="sample-button" onClick={startSample}>Explore sample</button></>}
       </div><div className="setting-section date-settings"><div className="panel-step date-step"><h2>Comparison date</h2><ComparisonDateHelp /></div><label className="select-wrap"><span className="sr-only">AI start date preset</span><select value={customDate ? 'custom' : cutoff} onChange={e => { if (e.target.value === 'custom') setCustomDate(true); else { setCustomDate(false); setCutoff(e.target.value); } }}><option value="2025-11-24">Claude Opus 4.5</option><option value="2025-09-29">Claude Sonnet 4.5</option><option value="custom">My own date</option></select><ChevronDown size={16} /></label>{customDate ? <label className="date-label">My AI start date<input type="date" value={cutoff} max={maxCutoff} min="1970-01-01" onChange={e => { if (comparisonDateAllowed(e.target.value, maxCutoff)) setCutoff(e.target.value); }} /></label> : <p className="date-caption">{formatDate(cutoff)}<span>00:00 UTC</span></p>}</div>
       <div className="setting-section repo-settings"><div className="panel-step"><h2>Repositories</h2></div>{authenticated || sample ? <><p className="repo-scope-note">Only your authored commits. Forks excluded.</p><div className="repo-heading"><span>{sample ? '4 sample repositories' : `${selectedCount} selected`}</span>{loadingRepos && <span className="loading-label">Finding repos…</span>}</div><label className="search-wrap"><Search size={14} aria-hidden="true" /><input ref={repositorySearch} aria-keyshortcuts="/" placeholder="Find a repository…" value={search} onChange={e => setSearch(e.target.value)} aria-label="Filter repositories" disabled={scanning} /><kbd>/</kbd></label><div className="repo-controls"><button className="text-button" disabled={scanning || sample || loadingRepos || addingRepo} onClick={() => setSelected(previous => new Set([...previous, ...visibleRepositories.map(r => r.id)]))}>Select all</button><button className="text-button" disabled={scanning || sample || loadingRepos || addingRepo} onClick={() => setSelected(new Set())}>Clear</button></div><div className="repository-list">{visibleRepositories.map(repo => <label key={repo.id} className="repository-option"><input type="checkbox" checked={selected.has(repo.id)} disabled={scanning || sample || loadingRepos || addingRepo} onChange={e => setSelected(previous => { const next = new Set(previous); if (e.target.checked) next.add(repo.id); else next.delete(repo.id); return next; })} /><span title={repo.nameWithOwner}><span className="repo-owner">{repo.nameWithOwner.split('/')[0]}/</span>{repo.nameWithOwner.split('/').slice(1).join('/')}{repo.isArchived && <small>Archived</small>}</span>{repo.isPrivate ? <LockKeyhole size={13} /> : null}</label>)}{!visibleRepositories.length && <p className="small-text">{loadingRepos ? 'Looking through your GitHub…' : 'No repositories found. Try another search or add a repository or organization.'}</p>}</div>{!sample && <><form className="add-repository" onSubmit={e => void addRepository(e)}><input placeholder="Repository or organization" aria-label="Repository or organization" aria-describedby="repository-source-hint" value={repoUrl} onChange={e => setRepoUrl(e.target.value)} disabled={scanning || loadingRepos || addingRepo} /><button className="icon-button" aria-label={addingRepo ? 'Adding repositories' : 'Add repository or organization'} disabled={!repoUrl.trim() || scanning || loadingRepos || addingRepo}><Plus size={17} /></button></form><p className="source-hint" id="repository-source-hint">Paste a GitHub URL or an organization name.</p>{sourceNotice && <p className="source-notice" role="status">{sourceNotice}</p>}<label className="private-toggle"><input type="checkbox" checked={includePrivate} disabled={scanning || loadingRepos || addingRepo || installing} onChange={e => { setIncludePrivate(e.target.checked); if (e.target.checked) void loadRepositories(true); }} /><span>Include private repositories</span><LockKeyhole size={13} /></label>{includePrivate && <div className="private-info"><p>Choose personal or organization repositories on GitHub. Your organization may need to approve access.</p><button className="text-button" disabled={scanning || installing || loadingRepos || addingRepo} onClick={() => void installPrivate()}>{installing ? 'Opening GitHub…' : 'Choose private repositories on GitHub'}</button><button className="text-button" disabled={loadingRepos || scanning || addingRepo || installing} onClick={() => void loadRepositories(true)}>Refresh access</button></div>}<button className="button primary scan-button" aria-keyshortcuts="Meta+Enter Control+Enter" title="Analyze selected repositories (⌘/Ctrl + Enter)" disabled={scanning ? false : !selectedCount || loadingRepos || addingRepo || installing} onClick={() => scanning ? operations.current.cancel('scan') : void scan()}>{scanning ? <><Square size={14} />Cancel scan</> : <>Analyze<kbd>{modifierLabel} ↵</kbd></>}</button></>}</> : <p className="repos-placeholder">Connect GitHub to select repositories.</p>}</div>
-      <section className="commit-filter-control" aria-label="File filter"><label className="commit-filter-toggle"><input type="checkbox" checked={excludeLockfiles} onChange={event => setExcludeLockfiles(event.target.checked)} /><span>Exclude lockfiles</span></label><p className="commit-filter-threshold">Both periods. File checks can make scans take longer.</p></section><CommitFilterControl enabled={skipOversized} onEnabledChange={setSkipOversized} />
+      <section className="commit-filter-control" aria-label="File filter"><label className="commit-filter-toggle"><input type="checkbox" checked={excludeLockfiles} onChange={event => setExcludeLockfiles(event.target.checked)} /><span>Exclude lockfiles</span></label><p className="commit-filter-threshold">Both periods. Verified file counts.</p></section><CommitFilterControl enabled={skipOversized} onEnabledChange={setSkipOversized} />
     </aside><div className="result-area">{(error || callbackError) && <div className="error-banner" role="alert"><span>{error || callbackError}{connectionExpired && <> <a href="/api/auth/github/start" className="reconnect-link">Reconnect GitHub</a></>}</span><button className="icon-button" aria-label="Dismiss error" onClick={() => { setError(''); setCallbackError(''); window.history.replaceState({}, '', '/'); }}><X size={16} /></button></div>}{selectionChanged && <p className="selection-notice" role="status">Repository selection changed. Analyze again to update these results.</p>}{scanning && <div className="scan-progress" role="status" aria-live="polite"><span className="spinner" /><div><strong>{scanMessage}</strong><span>{progress.filter(r => r.status === 'complete').length} of {progress.length} repositories complete</span></div></div>}{preview || sample || progress.length > 0 ? <Result result={result} login={user?.login ?? ''} sample={sample || preview} share={shareResult} /> : <div className="empty-result"><h2>Select repositories to begin.</h2><p>Your code stays on GitHub.</p><kbd>{modifierLabel} ↵ to analyze</kbd></div>}{!scanning && scanMessage && <p className="scan-completion" role="status">{scanMessage}</p>}{progress.some(p => p.message) && <details className="coverage-details"><summary>Repository coverage details</summary>{progress.filter(p => p.message).map(p => <p key={p.repository.id}><strong>{p.repository.nameWithOwner}</strong>: {p.message}</p>)}</details>}<p className="result-disclaimer">Unequal time spans. Activity, not AI authorship or productivity. <a href="/about">Methodology</a></p></div></div>
   </main><Footer />{share && <ShareDialog result={share} close={() => setShare(null)} />}</div>;
 }

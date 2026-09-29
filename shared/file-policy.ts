@@ -10,7 +10,7 @@ const lockfiles = new Set([
 ]);
 
 export function isLockfile(filename: string): boolean {
-  return lockfiles.has(filename.split('/').at(-1)?.toLowerCase() ?? '');
+  return lockfiles.has(filename.slice(filename.lastIndexOf('/') + 1).toLowerCase());
 }
 
 export function excludedFileLines(file: CommitFile): LineTotals {
@@ -20,17 +20,25 @@ export function excludedFileLines(file: CommitFile): LineTotals {
   };
 }
 
-/** Never label missing, repeated or partially paginated file statistics as clean. */
-export function hasCompleteFiles(commit: CommitRecord): boolean {
-  if (!commit.filesComplete || !commit.files || commit.files.length > 3000) return false;
-  if (!Number.isSafeInteger(commit.changedFiles) || commit.changedFiles! < 0 || commit.files.length !== commit.changedFiles) return false;
+/** Validate the whole list and total exclusions in one pass. Null means unknown, never zero. */
+export function summarizeCommitFiles(commit: CommitRecord): LineTotals | null {
+  if (!commit.filesComplete || !commit.files || commit.files.length > 3000) return null;
+  if (!Number.isSafeInteger(commit.changedFiles) || commit.changedFiles! < 0 || commit.files.length !== commit.changedFiles) return null;
   const paths = new Set<string>();
   let additions = 0, deletions = 0;
+  const excluded = { additions: 0, deletions: 0 };
   for (const file of commit.files) {
-    if (!file.filename || paths.has(file.filename) || !Number.isSafeInteger(file.additions) || file.additions < 0 || !Number.isSafeInteger(file.deletions) || file.deletions < 0) return false;
+    if (!file.filename || paths.has(file.filename) || !Number.isSafeInteger(file.additions) || file.additions < 0 || !Number.isSafeInteger(file.deletions) || file.deletions < 0) return null;
     paths.add(file.filename);
     additions += file.additions; deletions += file.deletions;
-    if (!Number.isSafeInteger(additions) || !Number.isSafeInteger(deletions)) return false;
+    if (!Number.isSafeInteger(additions) || !Number.isSafeInteger(deletions)) return null;
+    if (isLockfile(file.filename)) excluded.additions += file.additions;
+    if (isLockfile(file.previousFilename ?? file.filename)) excluded.deletions += file.deletions;
   }
-  return additions === commit.additions && deletions === commit.deletions;
+  return additions === commit.additions && deletions === commit.deletions ? excluded : null;
+}
+
+/** Never label missing, repeated or partially paginated file statistics as clean. */
+export function hasCompleteFiles(commit: CommitRecord): boolean {
+  return summarizeCommitFiles(commit) !== null;
 }

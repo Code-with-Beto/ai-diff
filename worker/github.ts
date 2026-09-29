@@ -108,6 +108,15 @@ export const CONTRIBUTED_QUERY = `query Contributed($after: String) { viewer { r
 export const ORGANIZATION_QUERY = `query OrganizationRepositories($login: String!, $after: String) { organization(login: $login) { repositories(first: 100, after: $after, ownerAffiliations: [OWNER], privacy: PUBLIC, isFork: false, orderBy: {field: NAME, direction: ASC}) { nodes { ${REPOSITORY_FIELDS} } pageInfo { hasNextPage endCursor } } } }`;
 export const PUBLIC_REPOSITORY_QUERY = `query PublicRepository($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { ${REPOSITORY_FIELDS} } }`;
 export const SNAPSHOT_QUERY = `query Snapshot($id: ID!) { node(id: $id) { ... on Repository { ${REPOSITORY_FIELDS} defaultBranchRef { target { ... on Commit { oid } } } } } }`;
+export const SNAPSHOT_WITH_HISTORY_QUERY = `query SnapshotWithHistory($id: ID!, $author: ID!, $until: GitTimestamp!) {
+  node(id: $id) { ... on Repository { ${REPOSITORY_FIELDS} defaultBranchRef { target { ... on Commit {
+    oid history(first: 100, author: {id: $author}, until: $until) {
+      nodes { oid additions deletions committedDate messageHeadline changedFilesIfAvailable author { user { id } } parents(first: 1) { totalCount } }
+      pageInfo { hasNextPage endCursor }
+    }
+  } } } } }
+  rateLimit { remaining resetAt }
+}`;
 export const FILE_REPOSITORY_QUERY = `query FileRepository($id: ID!) { node(id: $id) { ... on Repository { id databaseId nameWithOwner isPrivate isFork } } }`;
 export const SCAN_QUERY = `query ScanPage($id: ID!, $head: GitObjectID!, $author: ID!, $after: String, $until: GitTimestamp!) {
   node(id: $id) { ... on Repository { isPrivate isFork object(oid: $head) { ... on Commit {

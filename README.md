@@ -12,7 +12,7 @@ Compare your GitHub activity before and after you started using AI. Connect GitH
 
 - Discover public repositories you own or recently contributed to. Add a public organization to load its repositories, or add a repository by URL.
 - Include private repositories through selected GitHub App installations. Private organization access may require an owner’s approval.
-- Choose an AI release date or your own cutoff. Change the date and filters after scanning without fetching the history again.
+- Choose an AI release date or your own cutoff. Change the date and filters instantly after scanning. Repeated scans in the same tab reuse verified file details after checking current repository access and history.
 - Explore additions, deletions, monthly activity, and individual commits and files. Copy or download a result image, or create a short public link with that image as its social preview.
 
 AI Diff counts **lines added in default-branch commits whose primary author matches your GitHub account**. It excludes forks and merge commits, deduplicates commit SHAs, and splits the periods at midnight UTC.

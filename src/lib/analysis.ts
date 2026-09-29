@@ -1,11 +1,32 @@
-import type { AnalysisResult, AnalyzedCommit, CommitFilterSummary, CommitRecord, FileFilterSummary, MonthTotal, RepositoryProgress, Totals } from '../../shared/types.ts';
+import type { AnalysisResult, AnalyzedCommit, CommitFilterSummary, CommitRecord, FileFilterSummary, LineTotals, MonthTotal, RepositoryProgress, Totals } from '../../shared/types.ts';
+import { summarizeCommitFiles } from '../../shared/file-policy.ts';
 
 const emptyTotals = (): Totals => ({ additions: 0, deletions: 0, commits: 0 });
 const integer = (value: number) => Number.isSafeInteger(value) && value >= 0;
-import { excludedFileLines, hasCompleteFiles } from '../../shared/file-policy.ts';
 import { isDateOnly, OVERSIZED_COMMIT_THRESHOLD } from '../../shared/analysis-rules.ts';
 export { isDateOnly, OVERSIZED_COMMIT_THRESHOLD } from '../../shared/analysis-rules.ts';
 export interface CommitFilterOptions { enabled?: boolean; scope?: 'both' | 'before'; excludeLockfiles?: boolean }
+
+// Scan records and their file lists are immutable: an inspection or retry replaces
+// the record. Weak keys release private file metadata when its scan is discarded.
+// Repeated progress updates and cutoff/filter changes should not reread every file.
+const fileSummaries = new WeakMap<CommitRecord, {
+  files: CommitRecord['files']; filesComplete: CommitRecord['filesComplete']; changedFiles: CommitRecord['changedFiles'];
+  additions: number; deletions: number; excluded: LineTotals | null;
+}>();
+const zeroLines: Readonly<LineTotals> = Object.freeze({ additions: 0, deletions: 0 });
+function fileSummary(commit: CommitRecord): LineTotals | null {
+  const cached = fileSummaries.get(commit);
+  if (cached && cached.files === commit.files && cached.filesComplete === commit.filesComplete && cached.changedFiles === commit.changedFiles &&
+    cached.additions === commit.additions && cached.deletions === commit.deletions) return cached.excluded;
+  const excluded = summarizeCommitFiles(commit);
+  fileSummaries.set(commit, { files: commit.files, filesComplete: commit.filesComplete, changedFiles: commit.changedFiles,
+    additions: commit.additions, deletions: commit.deletions, excluded });
+  return excluded;
+}
+
+const numberFormatter = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
+const dateFormatter = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
 
 function addCommit(totals: Totals, commit: CommitRecord): void {
   totals.additions += commit.additions;
@@ -47,12 +68,13 @@ export function analyzeCommits(
   // A failed copy of a SHA must not hide a later successful read of the same commit.
   const completeCopies = new Map<string, CommitRecord>();
   for (const candidate of commits) {
-    if (candidate.authorId === userId && candidate.parentCount <= 1 && hasCompleteFiles(candidate)) completeCopies.set(candidate.oid, candidate);
+    if (candidate.authorId === userId && candidate.parentCount <= 1 && fileSummary(candidate) !== null) completeCopies.set(candidate.oid, candidate);
   }
   for (const original of commits) {
     const copy = completeCopies.get(original.oid);
-    const commit = copy && copy.additions === original.additions && copy.deletions === original.deletions && copy.committedDate === original.committedDate
-      ? { ...original, files: copy.files, filesComplete: true, changedFiles: copy.changedFiles, filesError: undefined } : original;
+    const inspected = copy && copy.additions === original.additions && copy.deletions === original.deletions && copy.committedDate === original.committedDate ? copy : original;
+    const commit = inspected === original ? original
+      : { ...original, files: inspected.files, filesComplete: true, changedFiles: inspected.changedFiles, filesError: undefined };
     const date = Date.parse(commit.committedDate);
     if (
       !userId || !commit.oid || seen.has(commit.oid) || commit.authorId !== userId ||
@@ -62,11 +84,9 @@ export function analyzeCommits(
     seen.add(commit.oid);
     const period = date < boundary ? 'before' : 'after';
     firstObserved = Math.min(firstObserved, date);
-    const complete = hasCompleteFiles(commit);
-    const locks = complete ? commit.files!.reduce((sum, file) => {
-      const excluded = excludedFileLines(file);
-      return { additions: sum.additions + excluded.additions, deletions: sum.deletions + excluded.deletions };
-    }, { additions: 0, deletions: 0 }) : { additions: 0, deletions: 0 };
+    const summary = fileSummary(inspected);
+    const complete = summary !== null;
+    const locks = summary ?? zeroLines;
     const detail: AnalyzedCommit = { ...commit, filesComplete: complete, countedAdditions: 0, countedDeletions: 0,
       lockfileAdditions: locks.additions, lockfileDeletions: locks.deletions, exclusion: null };
     details.push(detail);
@@ -138,12 +158,12 @@ export function analyzeCommits(
 }
 
 export function formatNumber(value: number): string {
-  return new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(value);
+  return numberFormatter.format(value);
 }
 
 export function formatDate(value: string): string {
   const date = new Date(value.length === 10 ? `${value}T00:00:00.000Z` : value);
   return Number.isFinite(date.getTime())
-    ? new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' }).format(date)
+    ? dateFormatter.format(date)
     : 'Unknown date';
 }
