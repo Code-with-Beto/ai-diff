@@ -1,18 +1,117 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
+import type { KeyboardEvent, PointerEvent } from 'react';
 import type { MonthTotal } from '../../shared/types';
-import { formatNumber } from '../lib/analysis';
+import { formatDate, formatNumber } from '../lib/analysis';
+import './MonthlyChart.css';
+
+const monthFormatter = new Intl.DateTimeFormat('en-US', { month: 'short', year: 'numeric', timeZone: 'UTC' });
+const axisFormatter = new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 });
+const monthLabel = (month: string) => monthFormatter.format(new Date(`${month}-01T00:00:00Z`));
+
 export default function MonthlyChart({ months, cutoff }: { months: MonthTotal[]; cutoff: string }) {
-  const [hover, setHover] = useState<MonthTotal | null>(null);
-  const width = 900, height = 180, max = Math.max(1, ...months.map(m => m.before + m.after));
-  const gap = Math.min(4, width / Math.max(months.length, 1) * .25), bar = width / Math.max(months.length, 1);
-  const years = months.map((m, i) => ({ month: m.month, i })).filter((m, i) => i === 0 || m.month.endsWith('-01'));
-  return <div className="chart-block">
-    <div className="chart-heading"><div><h3>Every commit tells a story.</h3><p>Lines added, month by month</p></div><span className="chart-readout">{hover ? `${new Date(hover.month + '-01T00:00:00Z').toLocaleDateString('en-US', { month: 'short', year: 'numeric', timeZone: 'UTC' })} · ${formatNumber(hover.before + hover.after)}` : `${formatNumber(max)} peak`}</span></div>
-    <svg className="activity-chart" viewBox={`0 0 ${width} ${height + 34}`} role="img" aria-label={`Monthly lines added. ${months.length} months. Before ${cutoff} shown in gray; on and after shown in green.`} onMouseLeave={() => setHover(null)}>
-      {[0, 1, 2, 3].map(i => <line key={i} x1="0" x2={width} y1={i * height / 3} y2={i * height / 3} className="chart-grid" />)}
-      {months.map((m, i) => { const before = m.before / max * (height - 12), after = m.after / max * (height - 12); return <g key={m.month} onMouseEnter={() => setHover(m)}><title>{m.month}: {formatNumber(m.before + m.after)} lines added</title><rect x={i * bar} y={0} width={bar} height={height} fill="transparent" /><rect x={i * bar} y={height - before} width={Math.max(1, bar - gap)} height={before || (m.after ? 0 : 2)} rx="1" fill="#58635a" /><rect x={i * bar} y={height - before - after} width={Math.max(1, bar - gap)} height={after} rx="1" fill="#c6f582" /></g>; })}
-      {years.filter((_, i) => i % Math.max(1, Math.ceil(years.length / 8)) === 0).map(({ month, i }) => <text key={month} x={i * bar} y={height + 27} fill="#8d968e" fontSize="13">{month.slice(0, 4)}</text>)}
-    </svg>
-    <details className="chart-table"><summary>View monthly values</summary><div className="table-scroll"><table><caption>Lines added by month</caption><thead><tr><th>Month</th><th>Before</th><th>After</th></tr></thead><tbody>{months.map(m => <tr key={m.month}><td>{m.month}</td><td>{formatNumber(m.before)}</td><td>{formatNumber(m.after)}</td></tr>)}</tbody></table></div></details>
-  </div>;
+  const id = useId();
+  const [selectedMonth, setSelectedMonth] = useState<string | null>(null);
+  const peakIndex = months.reduce((peak, month, index) => month.before + month.after > months[peak].before + months[peak].after ? index : peak, 0);
+  const selectedIndex = months.findIndex(month => month.month === selectedMonth);
+  const activeIndex = selectedIndex < 0 ? peakIndex : selectedIndex;
+  const activeMonth = months[activeIndex];
+  const peak = months[peakIndex] ? months[peakIndex].before + months[peakIndex].after : 0;
+  const scale = Math.max(1, peak);
+  const width = 960, height = 192;
+  const slotWidth = width / Math.max(months.length, 1);
+  const barWidth = slotWidth * .72;
+  const timeline = [...new Set([0, Math.round((months.length - 1) / 2), months.length - 1])].filter(index => index >= 0);
+  const years = months.map((month, index) => ({ month: month.month, index })).filter(({ month, index }) => index === 0 || month.endsWith('-01'));
+  const yearStride = Math.max(1, Math.ceil(years.length / 8));
+  const cutoffDate = new Date(`${cutoff}T00:00:00Z`);
+  const cutoffMonth = months.findIndex(month => month.month === cutoff.slice(0, 7));
+  const daysInMonth = new Date(Date.UTC(cutoffDate.getUTCFullYear(), cutoffDate.getUTCMonth() + 1, 0)).getUTCDate();
+  const cutoffPosition = cutoffMonth < 0 ? null : (cutoffMonth + (cutoffDate.getUTCDate() - 1) / daysInMonth) / months.length;
+
+  function exploreWithKeyboard(event: KeyboardEvent<HTMLDivElement>) {
+    const nextIndex = {
+      ArrowLeft: activeIndex - 1, ArrowDown: activeIndex - 1,
+      ArrowRight: activeIndex + 1, ArrowUp: activeIndex + 1,
+      Home: 0, End: months.length - 1,
+      PageUp: activeIndex + 12, PageDown: activeIndex - 12,
+    }[event.key];
+    if (nextIndex === undefined) return;
+    event.preventDefault();
+    setSelectedMonth(months[Math.max(0, Math.min(months.length - 1, nextIndex))].month);
+  }
+
+  function exploreWithPointer(event: PointerEvent<HTMLDivElement>) {
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const index = Math.floor((event.clientX - bounds.left) / bounds.width * months.length);
+    setSelectedMonth(months[Math.max(0, Math.min(months.length - 1, index))].month);
+  }
+
+  return <section className="monthly-chart" aria-labelledby={`${id}-heading`}>
+    <div className="monthly-chart__header">
+      <div><h3 id={`${id}-heading`}>Your activity over time</h3><p>Lines added, month by month.</p></div>
+      {activeMonth && <div className="monthly-chart__readout" aria-hidden="true">
+        <span className="monthly-chart__month">{monthLabel(activeMonth.month)}<span className="monthly-chart__selection">{activeIndex === peakIndex ? ' · peak' : ''}</span></span>
+        <strong>{formatNumber(activeMonth.before + activeMonth.after)}<span className="monthly-chart__unit"> lines</span></strong>
+      </div>}
+    </div>
+
+    {activeMonth ? <>
+      <div className="monthly-chart__legend" aria-label="Chart legend">
+        <span><i className="monthly-chart__swatch monthly-chart__swatch--before" aria-hidden="true" />Before AI</span>
+        <span><i className="monthly-chart__swatch monthly-chart__swatch--after" aria-hidden="true" />After AI</span>
+        {cutoffPosition !== null && <span className="monthly-chart__cutoff-key"><i aria-hidden="true" />{formatDate(cutoff)}</span>}
+      </div>
+      <div className="monthly-chart__graph">
+        <div className="monthly-chart__axis" aria-hidden="true"><span>{peak ? axisFormatter.format(peak) : ''}</span><span>{peak ? axisFormatter.format(peak / 2) : ''}</span><span>0</span></div>
+        <div
+          className="monthly-chart__plot"
+          role="slider"
+          tabIndex={0}
+          aria-label="Explore monthly lines added"
+          aria-orientation="horizontal"
+          aria-valuemin={1}
+          aria-valuemax={months.length}
+          aria-valuenow={activeIndex + 1}
+          aria-valuetext={`${monthLabel(activeMonth.month)}: ${formatNumber(activeMonth.before + activeMonth.after)} lines added, ${formatNumber(activeMonth.before)} before AI and ${formatNumber(activeMonth.after)} after AI`}
+          aria-describedby={`${id}-instructions ${id}-cutoff`}
+          onKeyDown={exploreWithKeyboard}
+          onPointerMove={exploreWithPointer}
+          onPointerDown={exploreWithPointer}
+        >
+          <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" aria-hidden="true">
+            <defs><pattern id={`${id}-before`} width="8" height="8" patternUnits="userSpaceOnUse"><rect width="8" height="8" className="monthly-chart__bar--before" /><path d="M-2 2 2-2 M0 8 8 0 M6 10 10 6" className="monthly-chart__pattern" /></pattern></defs>
+            {[0, .5, 1].map(fraction => <line key={fraction} x1={0} x2={width} y1={fraction * height} y2={fraction * height} className="monthly-chart__grid" vectorEffect="non-scaling-stroke" />)}
+            <rect x={activeIndex * slotWidth} y={0} width={slotWidth} height={height} className="monthly-chart__highlight" />
+            {months.map((month, index) => {
+              const before = month.before / scale * height, after = month.after / scale * height;
+              const x = index * slotWidth + (slotWidth - barWidth) / 2;
+              return <g key={month.month}>
+                <rect x={x} y={height - before} width={barWidth} height={before} fill={`url(#${id}-before)`} />
+                <rect x={x} y={height - before - after} width={barWidth} height={after} className="monthly-chart__bar--after" />
+              </g>;
+            })}
+            {cutoffPosition !== null && <line x1={cutoffPosition * width} x2={cutoffPosition * width} y1={0} y2={height} className="monthly-chart__cutoff" vectorEffect="non-scaling-stroke" />}
+          </svg>
+        </div>
+        <div className="monthly-chart__timeline monthly-chart__timeline--years" aria-hidden="true">
+          {years.filter((_, index) => index % yearStride === 0).map(({ month, index }) => <span key={month} style={{ left: `${(index + .5) / months.length * 100}%` }}>{month.slice(0, 4)}</span>)}
+        </div>
+        <div className="monthly-chart__timeline monthly-chart__timeline--months" aria-hidden="true">
+          {timeline.map(index => <span key={months[index].month} style={{ left: `${months.length > 1 ? index / (months.length - 1) * 100 : 0}%` }}>{monthLabel(months[index].month)}</span>)}
+        </div>
+      </div>
+      <p className="monthly-chart__hint" id={`${id}-instructions`}>Hover or tap a month to explore. Use arrow keys when focused.</p>
+      <span className="monthly-chart__sr-only" id={`${id}-cutoff`}>Before AI means before {formatDate(cutoff)}. After AI includes that date. The comparison starts at midnight UTC. Use Home or End for the first or last month.</span>
+      <details className="monthly-chart__details">
+        <summary><span>View monthly values</span><span className="monthly-chart__count">{formatNumber(months.length)} months</span></summary>
+        <div className="monthly-chart__table-scroll" tabIndex={0} role="region" aria-label="Monthly values table">
+          <table>
+            <caption>Lines added before and after {formatDate(cutoff)} (UTC)</caption>
+            <thead><tr><th scope="col">Month</th><th scope="col">Before AI</th><th scope="col">After AI</th></tr></thead>
+            <tbody>{months.map(month => <tr key={month.month}><th scope="row">{monthLabel(month.month)}</th><td>{formatNumber(month.before)}</td><td>{formatNumber(month.after)}</td></tr>)}</tbody>
+          </table>
+        </div>
+      </details>
+    </> : <div className="monthly-chart__empty"><p>No monthly activity to show yet.</p><span>Choose repositories and scan their history to see your timeline.</span></div>}
+  </section>;
 }
