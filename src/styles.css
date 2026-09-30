@@ -85,6 +85,7 @@ kbd { font: 12px/1.4 var(--mono); color: var(--muted); white-space: nowrap; }
 .account-filter { --filter-popover-width: 280px; }
 .account-name { max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
 .account-status { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.connection-loading { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; color: var(--muted); font-size: 14px; }
 .account-action { margin-top: 16px; width: 100%; }
 .filter-date { position: relative; display: flex; align-items: center; gap: 6px; min-width: 0; }
 .select-wrap { position: relative; display: block; }
@@ -113,19 +114,31 @@ kbd { font: 12px/1.4 var(--mono); color: var(--muted); white-space: nowrap; }
 .repo-controls { display: flex; align-items: center; justify-content: space-between; gap: 4px; margin: 8px 0; }
 .repo-selection-status, .repo-bulk-actions { display: flex; align-items: center; gap: 4px; }
 .repo-bulk-actions .icon-button { width: 36px; height: 36px; }
-.repository-access { border-top: 1px solid var(--line); margin-top: 16px; }
-.repository-access > summary { padding: 16px 0 0; color: var(--muted); font-size: 12px; line-height: 1.5; cursor: pointer; }
-.repository-access > summary:hover { color: var(--text); }
-.repository-source-row { display: flex; align-items: center; gap: 4px; margin-top: 16px; }
+.repository-access { border-bottom: 1px solid var(--line); padding-bottom: 16px; margin-bottom: 16px; }
+.repository-source-row { display: flex; align-items: center; gap: 4px; }
 .add-repository { display: flex; align-items: center; flex: 1; min-width: 0; gap: 4px; border: 1px solid var(--line); border-radius: 6px; padding-left: 12px; }
 .add-repository .icon-button { background: var(--panel-raised); color: var(--text); }
 .add-repository input { width: 100%; min-width: 0; border: 0; outline: 0; min-height: 40px; background: transparent; color: var(--text); font-size: 12px; }
 .source-notice { margin-top: 8px; color: var(--text); font-size: 12px; line-height: 1.6; }
 .setting-toggle { display: flex; align-items: center; gap: 8px; min-height: 44px; color: var(--text); font-size: 14px; line-height: 1.5; }
 .setting-toggle > span:first-child { flex: 1; }
-.private-toggle { margin-top: 12px; font-size: 13px; }
-.private-info { padding-top: 8px; }
-.private-info .text-button { margin-top: 8px; }
+.toolbar-private { gap: 4px; padding-inline: 4px; }
+.private-access-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 4px; }
+.private-access-actions .link-button { font-size: 12px; }
+.private-access-note { color: var(--muted); font-size: 12px; line-height: 1.6; }
+.repository-discovery-status { display: flex; align-items: center; gap: 10px; margin-top: 16px; color: var(--muted); font-size: 13px; line-height: 1.6; }
+.discovery-error { margin-top: 12px; color: var(--muted); font-size: 13px; line-height: 1.6; }
+.discovery-error .link-button { font-size: inherit; padding-block: 0; min-height: 28px; }
+.repository-loading-state { padding: 4px 0 24px; }
+.loading-placeholder { border-radius: 4px; background: var(--panel-raised); animation: loading-pulse 1.8s ease-in-out infinite; }
+.loading-handle { width: 144px; height: 16px; }
+.loading-metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 48px; margin-top: 48px; }
+.loading-label { width: 48px; height: 12px; }
+.loading-number { width: min(72%, 280px); height: 60px; margin-top: 20px; }
+.loading-range { width: min(85%, 240px); height: 12px; margin-top: 24px; }
+.loading-chart { height: 144px; margin-top: 48px; }
+@keyframes loading-pulse { 50% { opacity: .45; } }
+@media (prefers-reduced-motion: reduce) { .loading-placeholder { animation: none; } }
 
 
 /* The result uses three text levels and a single alignment line. */
@@ -215,14 +228,17 @@ kbd { font: 12px/1.4 var(--mono); color: var(--muted); white-space: nowrap; }
   .intro { padding: 24px 0 40px; }
   .intro h1 { font-size: 30px; }
   .intro p { font-size: 14px; max-width: 30ch; }
-  .analysis-toolbar { gap: 10px; }
-  .filter-date { flex: 1 1 100%; flex-wrap: wrap; }
+  .analysis-toolbar { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .account-filter, .connection-controls, .connection-loading { grid-column: 1 / -1; justify-self: start; }
+  .filter-date { grid-column: 1 / -1; flex-wrap: wrap; }
   .filter-date .select-wrap { flex: 1; }
   .filter-date:has(.custom-date) .select-wrap { flex: 1 1 calc(100% - 40px); }
   .custom-date { flex: 1 1 100%; order: 1; }
   .custom-date input { max-width: none; }
-  .repository-filter { flex: 1; }
-  .analyze-action { flex: 1 1 100%; margin-left: 0; }
+  .repository-filter, .line-filters { width: 100%; }
+  .toolbar-private { justify-content: space-between; }
+  .analyze-action { margin-left: 0; }
+  .analysis-toolbar:not(:has(.toolbar-private)) .analyze-action { grid-column: 1 / -1; }
   .result-area { margin-top: 32px; }
   .custom-date input, .search-wrap input, .add-repository input, .select-wrap select { font-size: 16px; }
   .result-topline { gap: 12px; align-items: flex-start; }

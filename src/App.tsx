@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Check, ChevronDown, CircleHelp, Github, ListChecks, ListX, LogOut, Plus, Search, SlidersHorizontal, Square, X } from 'lucide-react';
-import type { AnalysisResult, CommitRecord, InstallationsPage, Repository, RepositoryPage, RepositoryProgress, SessionInfo, ShareResult } from '../shared/types';
+import { Check, ChevronDown, CircleHelp, Github, ListChecks, ListX, LogOut, Plus, RefreshCw, Search, SlidersHorizontal, Square, X } from 'lucide-react';
+import type { AnalysisResult, CommitRecord, Repository, RepositoryPage, RepositoryProgress, SessionInfo, ShareResult } from '../shared/types';
 import { ApiError, api } from './api';
 import { analyzeCommits, formatDate, formatNumber } from './lib/analysis';
 import { SAMPLE_AS_OF, SAMPLE_COMMITS, SAMPLE_REPOSITORIES, SAMPLE_USER } from './lib/sample';
 import { createShareResult, decodeShare, describeAdditionChange } from './lib/share';
 import { readPublishedShare } from './lib/published-share';
 import { scanRepositories } from './lib/repository-scan';
+import { discoverPublicRepositories, discoverPrivateRepositories } from './lib/repository-discovery';
+import { readPrivateRepositoryPreference, savePrivateRepositoryPreference } from './lib/repository-preference';
 import { InspectionCache } from './lib/inspection-cache';
 import { isNonForkRepository } from '../shared/repository-policy';
 import { callbackMessage, comparisonDateAllowed, createOperationScope, isAuthenticationError, parseRepositorySource } from './lib/client-state';
@@ -25,12 +27,28 @@ import { areSingleKeyShortcutsEnabled, isEditingTarget, modifierLabel } from './
 
 const DEFAULT_DATE = '2025-11-24';
 const today = () => new Date().toISOString().slice(0, 10);
+function discoveryFailure(error: unknown, fallback: string) {
+  if (error instanceof ApiError && error.code === 'rate_limited') {
+    const seconds = Math.max(1, Math.ceil(error.retryAfter ?? 60));
+    return { message: `GitHub is limiting repository requests. Try again in ${seconds} seconds.`, retryAt: Date.now() + seconds * 1000 };
+  }
+  return { message: fallback, retryAt: 0 };
+}
 const completeSample = SAMPLE_REPOSITORIES.map(repository => ({ repository, status: 'complete' as const, commits: 0 }));
 function Header() {
   return <header className="site-header"><a className="brand" href="/" aria-label="AI Diff home">AI Diff</a><nav aria-label="Main navigation"><a href="/about">About</a><a className="icon-button github-link" href="https://github.com/Code-with-Beto/ai-diff" target="_blank" rel="noreferrer" aria-label="GitHub repository" title="View source on GitHub"><Github size={18} aria-hidden="true" /></a><KeyboardShortcuts /><ThemeToggle /></nav></header>;
 }
 function Footer() {
   return <footer className="site-footer"><a href="https://codewithbeto.dev" target="_blank" rel="noreferrer">by Code with Beto</a><a href="https://github.com/Code-with-Beto/ai-diff" target="_blank" rel="noreferrer">GitHub</a><a href="/about#privacy">Privacy</a></footer>;
+}
+function RepositoryLoading() {
+  return <div className="repository-loading-state" aria-hidden="true">
+    <div className="loading-placeholder loading-handle" />
+    <div className="loading-metrics">{[0, 1].map(index => <div key={index}>
+      <div className="loading-placeholder loading-label" /><div className="loading-placeholder loading-number" /><div className="loading-placeholder loading-range" />
+    </div>)}</div>
+    <div className="loading-placeholder loading-chart" />
+  </div>;
 }
 function Result({ result, login, sample, share, shared = false }: { result: AnalysisResult; login: string; sample: boolean; share: () => void; shared?: boolean }) {
   const missingFiles = (result.fileFilter?.uninspectedBefore.commits ?? 0) + (result.fileFilter?.uninspectedAfter.commits ?? 0);
@@ -90,10 +108,14 @@ export default function App() {
   const [skipOversized, setSkipOversized] = useState(true);
   const [excludeLockfiles, setExcludeLockfiles] = useState(true);
   const [sample, setSample] = useState(false), [repositories, setRepositories] = useState<Repository[]>([]), [selected, setSelected] = useState<Set<string>>(new Set());
-  const [loadingRepos, setLoadingRepos] = useState(false), [addingRepo, setAddingRepo] = useState(false), [installing, setInstalling] = useState(false);
+  const [loadingPublic, setLoadingPublic] = useState(false), [loadingPrivate, setLoadingPrivate] = useState(false);
+  const [addingRepo, setAddingRepo] = useState(false), [installing, setInstalling] = useState(false);
+  const [publicDiscoveryError, setPublicDiscoveryError] = useState(''), [privateDiscoveryError, setPrivateDiscoveryError] = useState('');
+  const [publicRetryAt, setPublicRetryAt] = useState(0), [privateRetryAt, setPrivateRetryAt] = useState(0);
+  const [privateInstallations, setPrivateInstallations] = useState<number | null>(null);
   const [search, setSearch] = useState(''), [repoUrl, setRepoUrl] = useState(''), [sourceNotice, setSourceNotice] = useState('');
   const [openFilter, setOpenFilter] = useState<'account' | 'repositories' | 'filters' | null>(null);
-  const [includePrivate, setIncludePrivate] = useState(() => new URLSearchParams(window.location.search).get('private') === 'connected' || new URLSearchParams(window.location.search).get('auth') === 'installation_failed');
+  const [includePrivate, setIncludePrivate] = useState(true);
   const [commits, setCommits] = useState<CommitRecord[]>([]), [progress, setProgress] = useState<RepositoryProgress[]>([]), [asOf, setAsOf] = useState(new Date().toISOString());
   const [scanning, setScanning] = useState(false), [scanMessage, setScanMessage] = useState(''), [error, setError] = useState('');
   const [callbackError, setCallbackError] = useState(() => callbackMessage(window.location.search));
@@ -103,6 +125,8 @@ export default function App() {
   const knownRepositories = useRef(new Set<string>());
   const inspectionCache = useRef(new InspectionCache());
   const authenticated = !!session?.authenticated;
+  const loadingRepos = loadingPublic || (includePrivate && loadingPrivate);
+  const sessionPending = !session && !sessionFailed && !sample;
 
   useEffect(() => () => { operations.current.invalidateAll(); inspectionCache.current.clear(); }, []);
   useEffect(() => { inspectionCache.current.forAccount(authenticated ? session?.user?.id ?? null : null); }, [authenticated, session?.user?.id]);
@@ -116,22 +140,49 @@ export default function App() {
     if (isAbout || isShared) return;
     const task = operations.current.start('session');
     api<SessionInfo>('/api/session', { signal: task.signal }).then(data => {
-      if (task.isActive()) { setSession(data); setSessionFailed(false); }
+      if (task.isActive()) {
+        if (data.authenticated && data.user) {
+          const params = new URLSearchParams(window.location.search);
+          const returningFromSetup = params.get('private') === 'connected' || params.get('auth') === 'installation_failed';
+          setIncludePrivate(returningFromSetup || readPrivateRepositoryPreference(data.user.id));
+          if (returningFromSetup) {
+            savePrivateRepositoryPreference(data.user.id, true);
+            const cleanUrl = new URL(window.location.href);
+            if (cleanUrl.searchParams.get('private') === 'connected') cleanUrl.searchParams.delete('private');
+            if (cleanUrl.searchParams.get('auth') === 'installation_failed') cleanUrl.searchParams.delete('auth');
+            window.history.replaceState({}, '', `${cleanUrl.pathname}${cleanUrl.search}${cleanUrl.hash}`);
+          }
+        }
+        setSession(data); setSessionFailed(false);
+      }
     }).catch(() => { if (task.isActive()) setSessionFailed(true); });
     return () => operations.current.cancel('session');
   }, [isAbout, isShared]);
   useEffect(() => {
-    if (authenticated && !sample) void loadRepositories(includePrivate);
+    if (authenticated && !sample) {
+      void loadPublicRepositories();
+      if (includePrivate) void loadPrivateRepositories();
+    }
   }, [authenticated, session?.user?.id, sample]);
   useEffect(() => {
     if (!authenticated || !session?.expiresAt) return;
     const timeout = setTimeout(() => expireSession(), Math.max(0, session.expiresAt * 1000 - Date.now()));
     return () => clearTimeout(timeout);
   }, [authenticated, session?.expiresAt]);
+  useEffect(() => {
+    const retries = [publicRetryAt, privateRetryAt].filter(value => value > 0);
+    if (!retries.length) return;
+    const timeout = setTimeout(() => {
+      const now = Date.now();
+      setPublicRetryAt(value => value <= now ? 0 : value);
+      setPrivateRetryAt(value => value <= now ? 0 : value);
+    }, Math.max(0, Math.min(...retries) - Date.now()));
+    return () => clearTimeout(timeout);
+  }, [publicRetryAt, privateRetryAt]);
 
   function stopOperations() {
     operations.current.invalidateAll();
-    setLoadingRepos(false); setAddingRepo(false); setInstalling(false); setScanning(false);
+    setLoadingPublic(false); setLoadingPrivate(false); setAddingRepo(false); setInstalling(false); setScanning(false);
   }
   function expireSession() {
     stopOperations();
@@ -158,38 +209,64 @@ export default function App() {
     });
     setSelected(previous => new Set([...previous, ...newIds]));
   }
-  async function loadRepositories(privateToo: boolean) {
-    const task = operations.current.start('discovery');
-    setLoadingRepos(true); setError('');
+  async function loadPublicRepositories() {
+    if (Date.now() < publicRetryAt) return;
+    const task = operations.current.start('discovery-public');
+    setLoadingPublic(true); setPublicDiscoveryError('');
     try {
-      for (const kind of ['owned', 'contributed']) {
-        let cursor: string | null = null;
-        do {
-          const page: RepositoryPage = await api(`/api/github/repositories?kind=${kind}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`, { signal: task.signal });
-          if (!task.isActive()) return;
-          mergeRepositories(page.repositories.filter(repo => !repo.isPrivate));
-          cursor = page.hasNextPage ? page.cursor : null;
-        } while (cursor);
+      const outcome = await discoverPublicRepositories({
+        signal: task.signal,
+        request: (path, signal) => api(path, { signal }),
+        onRepositories: items => { if (task.isActive()) mergeRepositories(items); },
+      });
+      if (!task.isActive()) return;
+      if (outcome.errors.some(item => isAuthenticationError(item.error))) { expireSession(); return; }
+      if (outcome.errors.length) {
+        const failure = discoveryFailure(outcome.errors.find(item => item.error instanceof ApiError && item.error.code === 'rate_limited')?.error, 'Some public repositories could not be loaded. The list may be incomplete.');
+        setPublicDiscoveryError(failure.message); setPublicRetryAt(failure.retryAt);
       }
-      if (privateToo) {
-        let nextPage: number | null = 1;
-        do {
-          const installations: InstallationsPage = await api(`/api/github/installations?page=${nextPage}`, { signal: task.signal });
-          if (!task.isActive()) return;
-          for (const installation of installations.installations) {
-            let cursor: string | null = null;
-            do {
-              const page: RepositoryPage = await api(`/api/github/repositories?kind=installation&installationId=${installation.id}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`, { signal: task.signal });
-              if (!task.isActive()) return;
-              mergeRepositories(page.repositories);
-              cursor = page.hasNextPage ? page.cursor : null;
-            } while (cursor);
-          }
-          nextPage = installations.nextPage;
-        } while (nextPage);
+    } catch (value) {
+      if (task.isActive()) {
+        if (isAuthenticationError(value)) expireSession();
+        else { const failure = discoveryFailure(value, 'Public repositories could not finish loading. Try again.'); setPublicDiscoveryError(failure.message); setPublicRetryAt(failure.retryAt); }
       }
-    } catch (value) { if (task.isActive()) reportError(value, 'Repositories could not be loaded.'); }
-    finally { if (task.isCurrent()) { setLoadingRepos(false); task.finish(); } }
+    } finally { if (task.isCurrent()) { setLoadingPublic(false); task.finish(); } }
+  }
+  async function loadPrivateRepositories() {
+    if (Date.now() < privateRetryAt) return;
+    const task = operations.current.start('discovery-private');
+    setLoadingPrivate(true); setPrivateDiscoveryError('');
+    try {
+      const discoveredPrivate = new Set<string>();
+      const outcome = await discoverPrivateRepositories({
+        signal: task.signal,
+        request: (path, signal) => api(path, { signal }),
+        onRepositories: items => {
+          if (!task.isActive()) return;
+          items.filter(repo => repo.isPrivate).forEach(repo => discoveredPrivate.add(repo.id));
+          mergeRepositories(items);
+        },
+      });
+      if (!task.isActive()) return;
+      setPrivateInstallations(outcome.installations);
+      if (outcome.errors.some(item => isAuthenticationError(item.error))) { expireSession(); return; }
+      if (outcome.errors.length) setPrivateDiscoveryError('Some authorized repositories could not be loaded. Private coverage may be incomplete.');
+      else setRepositories(previous => previous.filter(repo => !repo.isPrivate || discoveredPrivate.has(repo.id)));
+    } catch (value) {
+      if (task.isActive()) {
+        if (isAuthenticationError(value)) expireSession();
+        else { const failure = discoveryFailure(value, 'Private access could not be checked. Public repositories are still available.'); setPrivateDiscoveryError(failure.message); setPrivateRetryAt(failure.retryAt); }
+      }
+    } finally { if (task.isCurrent()) { setLoadingPrivate(false); task.finish(); } }
+  }
+  function changePrivateInclusion(enabled: boolean) {
+    setIncludePrivate(enabled);
+    if (session?.user?.id) savePrivateRepositoryPreference(session.user.id, enabled);
+    if (enabled) void loadPrivateRepositories();
+    else {
+      operations.current.cancel('discovery-private');
+      setLoadingPrivate(false);
+    }
   }
   async function addRepository(event: React.FormEvent) {
     event.preventDefault();
@@ -241,6 +318,8 @@ export default function App() {
   }
   function resetReport() {
     setOpenFilter(null);
+    setPublicDiscoveryError(''); setPrivateDiscoveryError(''); setPrivateInstallations(null);
+    setPublicRetryAt(0); setPrivateRetryAt(0);
     knownRepositories.current.clear();
     setRepositories([]); setSelected(new Set()); setProgress([]); setCommits([]); setShare(null); setSearch(''); setRepoUrl(''); setSourceNotice(''); setScanMessage('');
   }
@@ -311,12 +390,15 @@ export default function App() {
     }
   }
 
-  const preview = !authenticated && !sample && progress.length === 0;
+  const preview = !sessionPending && !authenticated && !sample && progress.length === 0;
   const result = useMemo(() => analyzeCommits(preview ? SAMPLE_COMMITS : commits, sample || preview ? SAMPLE_USER.id : session?.user?.id ?? '', cutoff, preview ? SAMPLE_AS_OF : asOf, preview ? completeSample : progress, { enabled: skipOversized, scope: 'both', excludeLockfiles }), [preview, commits, sample, session, cutoff, asOf, progress, skipOversized, excludeLockfiles]);
   const maxCutoff = sample || preview ? SAMPLE_AS_OF.slice(0, 10) : progress.length ? asOf.slice(0, 10) : today();
   const visibleRepositories = repositories.filter(repo => isNonForkRepository(repo) && (sample || includePrivate || !repo.isPrivate) && repo.nameWithOwner.toLowerCase().includes(search.toLowerCase()));
   const selectedRepositories = repositories.filter(repo => isNonForkRepository(repo) && selected.has(repo.id) && (sample || includePrivate || !repo.isPrivate));
   const selectedCount = selectedRepositories.length;
+  const availableCount = repositories.filter(repo => isNonForkRepository(repo) && (includePrivate || !repo.isPrivate)).length;
+  const privateCount = repositories.filter(repo => isNonForkRepository(repo) && repo.isPrivate).length;
+  const discoveryPending = !sample && authenticated && loadingRepos;
   const selectionChanged = !sample && !preview && !scanning && progress.length > 0 && (selectedCount !== progress.length || progress.some(item => !selectedRepositories.some(repo => repo.id === item.repository.id)));
   const user = sample || preview ? SAMPLE_USER : session?.user;
   const shareResult = () => {
@@ -349,7 +431,7 @@ export default function App() {
     <section className="intro"><h1>Before and after AI.</h1><p>Lines added to your GitHub history, split by date.</p></section>
     <div className="workspace">
       <section className="analysis-toolbar" aria-label="Analysis settings">
-        {sample || authenticated ? <FilterDropdown
+        {sessionPending ? <span className="connection-loading"><span className="spinner" aria-hidden="true" />Connecting…</span> : sample || authenticated ? <FilterDropdown
           className="account-filter"
           label={<><Github size={16} aria-hidden="true" /><span className="account-name">{sample ? 'Sample account' : session?.user?.login}</span></>}
           ariaLabel={sample ? 'Sample account options' : `GitHub account ${session?.user?.login}`}
@@ -385,12 +467,25 @@ export default function App() {
 
         <FilterDropdown
           className="repository-filter"
-          label={<>Repositories <span className="filter-count">{loadingRepos ? '…' : selectedCount}</span></>}
+          label={<>Repos {loadingRepos && <span className="spinner" aria-hidden="true" />}<span className="filter-count">{selectedCount}</span></>}
           ariaLabel={`Repositories, ${selectedCount} selected`}
           disabled={!authenticated && !sample}
           open={openFilter === 'repositories'} onOpenChange={open => setOpenFilter(open ? 'repositories' : null)}
           initialFocusRef={repositorySearch}
         >
+          {!sample && <div className="repository-access">
+            <div className="repository-source-row"><form className="add-repository" onSubmit={event => void addRepository(event)}>
+              <input placeholder="Add repository or organization" aria-label="Repository or organization" value={repoUrl} onChange={event => setRepoUrl(event.target.value)} disabled={scanning || addingRepo} />
+              <Tooltip label="Add repository or organization"><button className="icon-button" aria-label={addingRepo ? 'Adding repositories' : 'Add repository or organization'} disabled={!repoUrl.trim() || scanning || loadingRepos || addingRepo}><Plus size={17} aria-hidden="true" /></button></Tooltip>
+            </form><HelpTooltip label="How to add repositories">Paste a public GitHub repository URL or an organization name to find more repositories.</HelpTooltip></div>
+            {sourceNotice && <p className="source-notice" role="status">{sourceNotice}</p>}
+            <div className="private-access-actions">
+              <button className="link-button" disabled={scanning || installing || addingRepo} onClick={() => void installPrivate()}>{installing ? 'Opening GitHub…' : privateCount ? 'Manage private access' : 'Connect private repositories'}</button>
+              <Tooltip label="Refresh private access"><button className="icon-button" aria-label="Refresh private access" disabled={!includePrivate || loadingPrivate || privateRetryAt > 0 || scanning || addingRepo || installing} onClick={() => void loadPrivateRepositories()}><RefreshCw size={15} aria-hidden="true" /></button></Tooltip>
+            </div>
+            {includePrivate && privateInstallations === 0 && !loadingPrivate && !privateDiscoveryError && <p className="private-access-note">No private access connected yet.</p>}
+            {includePrivate && privateInstallations !== null && privateInstallations > 0 && !loadingPrivate && !privateDiscoveryError && <p className="private-access-note">{privateCount} private {privateCount === 1 ? 'repository' : 'repositories'} available.</p>}
+          </div>}
           <label className="search-wrap"><Search size={15} aria-hidden="true" /><input ref={repositorySearch} aria-keyshortcuts="/" placeholder="Find a repository…" value={search} onChange={event => setSearch(event.target.value)} onKeyDown={event => {
             if (event.key === 'ArrowDown') {
               const option = event.currentTarget.closest('.filter-popover')?.querySelector<HTMLElement>('[role="option"][tabindex="0"]');
@@ -398,31 +493,20 @@ export default function App() {
             }
           }} aria-label="Filter repositories" disabled={scanning} /><kbd>/</kbd></label>
           <div className="repo-controls">
-            <div className="repo-selection-status"><span className="small-text" role="status">{loadingRepos ? 'Finding repos…' : `${selectedCount} selected`}</span><HelpTooltip label="About repository selection">Only your authored commits are counted. Forks are excluded.</HelpTooltip></div>
+            <div className="repo-selection-status"><span className="small-text">{loadingRepos ? `${availableCount} found · loading…` : `${selectedCount} selected`}</span><HelpTooltip label="About repository selection">Only your authored commits are counted. Forks are excluded.</HelpTooltip></div>
             <div className="repo-bulk-actions">
               <Tooltip label={search ? 'Select matching repositories' : 'Select all repositories'}><button type="button" className="icon-button" aria-label={search ? 'Select matching repositories' : 'Select all repositories'} disabled={scanning || sample || loadingRepos || addingRepo} onClick={() => setSelected(previous => new Set([...previous, ...visibleRepositories.map(repository => repository.id)]))}><ListChecks size={17} aria-hidden="true" /></button></Tooltip>
               <Tooltip label="Clear selection"><button type="button" className="icon-button" aria-label="Clear selection" disabled={scanning || sample || loadingRepos || addingRepo} onClick={() => setSelected(new Set())}><ListX size={17} aria-hidden="true" /></button></Tooltip>
             </div>
           </div>
-          <RepositorySelect repositories={visibleRepositories} selected={selected} disabled={scanning || sample || loadingRepos || addingRepo} loading={loadingRepos} onToggle={(id, checked) => setSelected(previous => {
+          <RepositorySelect repositories={visibleRepositories} selected={selected} disabled={scanning || sample || addingRepo} loading={loadingRepos} onToggle={(id, checked) => setSelected(previous => {
             const next = new Set(previous);
             if (checked) next.add(id); else next.delete(id);
             return next;
           })} />
-          {!sample && <details className="repository-access">
-            <summary>Add repositories or private access</summary>
-            <div className="repository-source-row"><form className="add-repository" onSubmit={event => void addRepository(event)}>
-              <input placeholder="Repository or organization" aria-label="Repository or organization" value={repoUrl} onChange={event => setRepoUrl(event.target.value)} disabled={scanning || loadingRepos || addingRepo} />
-              <Tooltip label="Add repository or organization"><button className="icon-button" aria-label={addingRepo ? 'Adding repositories' : 'Add repository or organization'} disabled={!repoUrl.trim() || scanning || loadingRepos || addingRepo}><Plus size={17} aria-hidden="true" /></button></Tooltip>
-            </form><HelpTooltip label="How to add repositories">Paste a public GitHub repository URL or an organization name to find more repositories.</HelpTooltip></div>
-            {sourceNotice && <p className="source-notice" role="status">{sourceNotice}</p>}
-            <div className="setting-toggle private-toggle"><span>Private repositories</span><HelpTooltip label="About private repositories">Choose personal or organization repositories on GitHub. Access is read-only, and your organization may need to approve it.</HelpTooltip><Switch label="Include private repositories" checked={includePrivate} disabled={scanning || loadingRepos || addingRepo || installing} onCheckedChange={checked => { setIncludePrivate(checked); if (checked) void loadRepositories(true); }} /></div>
-            {includePrivate && <div className="private-info">
-              <button className="text-button" disabled={scanning || installing || loadingRepos || addingRepo} onClick={() => void installPrivate()}>{installing ? 'Opening GitHub…' : 'Choose repositories on GitHub'}</button>
-              <button className="text-button" disabled={loadingRepos || scanning || addingRepo || installing} onClick={() => void loadRepositories(true)}>Refresh access</button>
-            </div>}
-          </details>}
         </FilterDropdown>
+
+        {authenticated && !sample && <div className="setting-toggle toolbar-private"><span>Private</span><HelpTooltip label="About private repositories">Includes personal and organization repositories already authorized through the GitHub App. Use Repositories → Connect private repositories to grant access. Your choice is remembered on this browser.</HelpTooltip><Switch label="Include private repositories" checked={includePrivate} disabled={scanning || addingRepo || installing} onCheckedChange={changePrivateInclusion} /></div>}
 
         <FilterDropdown
           className="line-filters"
@@ -438,10 +522,13 @@ export default function App() {
           {scanning ? <><Square size={14} aria-hidden="true" />Cancel scan</> : <>Analyze<kbd>{modifierLabel} ↵</kbd></>}
         </button>
       </section>
+      {(sessionPending || discoveryPending) && <div className="repository-discovery-status" role="status" aria-live="polite"><span className="spinner" aria-hidden="true" /><span>{sessionPending ? 'Checking your GitHub connection…' : `${availableCount} ${availableCount === 1 ? 'repository' : 'repositories'} found · ${loadingPublic ? 'finding public repositories' : 'checking private access'}…`}</span></div>}
+      {publicDiscoveryError && <p className="discovery-error" role="alert">{publicDiscoveryError} <button className="link-button" disabled={loadingPublic || publicRetryAt > 0 || scanning} onClick={() => void loadPublicRepositories()}>Retry public discovery</button></p>}
+      {includePrivate && privateDiscoveryError && <p className="discovery-error" role="alert">{privateDiscoveryError} <button className="link-button" disabled={loadingPrivate || privateRetryAt > 0 || scanning} onClick={() => void loadPrivateRepositories()}>Retry private access</button></p>}
       {!authenticated && !sample && (sessionFailed || (session && !session.configured)) && <div className="connection-note">
         {sessionFailed ? <span>Connection unavailable. <button className="link-button" onClick={() => window.location.reload()}>Retry</button></span> : 'GitHub isn’t configured locally. Explore the sample.'}
       </div>}
       <div className="result-area">
-{(error || callbackError) && <div className="error-banner" role="alert"><span>{error || callbackError}{connectionExpired && <> <a href="/api/auth/github/start" className="reconnect-link">Reconnect GitHub</a></>}</span><button className="icon-button" aria-label="Dismiss error" onClick={() => { setError(''); setCallbackError(''); window.history.replaceState({}, '', '/'); }}><X size={16} /></button></div>}{selectionChanged && <p className="selection-notice" role="status">Repository selection changed. Analyze again to update these results.</p>}{scanning && <div className="scan-progress" role="status" aria-live="polite"><span className="spinner" /><div><strong>{scanMessage}</strong><span>{progress.filter(r => r.status === 'complete').length} of {progress.length} repositories complete</span></div></div>}{preview || sample || progress.length > 0 ? <Result result={result} login={user?.login ?? ''} sample={sample || preview} share={shareResult} /> : <div className="empty-result"><h2>Select repositories to begin.</h2><p>Your code stays on GitHub.</p><kbd>{modifierLabel} ↵ to analyze</kbd></div>}{!scanning && scanMessage && <p className="scan-completion" role="status">{scanMessage}</p>}{progress.some(p => p.message) && <details className="coverage-details"><summary>Repository coverage details</summary>{progress.filter(p => p.message).map(p => <p key={p.repository.id}><strong>{p.repository.nameWithOwner}</strong>: {p.message}</p>)}</details>}<p className="result-disclaimer">Unequal time spans. Activity, not AI authorship or productivity. <a href="/about">Methodology</a></p></div></div>
+{(error || callbackError) && <div className="error-banner" role="alert"><span>{error || callbackError}{connectionExpired && <> <a href="/api/auth/github/start" className="reconnect-link">Reconnect GitHub</a></>}</span><button className="icon-button" aria-label="Dismiss error" onClick={() => { setError(''); setCallbackError(''); window.history.replaceState({}, '', '/'); }}><X size={16} /></button></div>}{selectionChanged && <p className="selection-notice" role="status">Repository selection changed. Analyze again to update these results.</p>}{scanning && <div className="scan-progress" role="status" aria-live="polite"><span className="spinner" /><div><strong>{scanMessage}</strong><span>{progress.filter(r => r.status === 'complete').length} of {progress.length} repositories complete</span></div></div>}{progress.length === 0 && (sessionPending || discoveryPending) ? <RepositoryLoading /> : preview || sample || progress.length > 0 ? <Result result={result} login={user?.login ?? ''} sample={sample || preview} share={shareResult} /> : <div className="empty-result"><h2>Select repositories to begin.</h2><p>Your code stays on GitHub.</p><kbd>{modifierLabel} ↵ to analyze</kbd></div>}{!scanning && scanMessage && <p className="scan-completion" role="status">{scanMessage}</p>}{progress.some(p => p.message) && <details className="coverage-details"><summary>Repository coverage details</summary>{progress.filter(p => p.message).map(p => <p key={p.repository.id}><strong>{p.repository.nameWithOwner}</strong>: {p.message}</p>)}</details>}<p className="result-disclaimer">Unequal time spans. Activity, not AI authorship or productivity. <a href="/about">Methodology</a></p></div></div>
   </main><Footer />{share && <ShareDialog result={share} ownResult close={() => setShare(null)} />}</div>;
 }

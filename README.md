@@ -11,7 +11,7 @@ Compare your GitHub activity before and after you started using AI. Connect GitH
 ## How it works
 
 - Discover public repositories you own or recently contributed to. Add a public organization to load its repositories, or add a repository by URL.
-- Include private repositories through selected GitHub App installations. Private organization access may require an owner’s approval.
+- Repositories load progressively. Private repositories already authorized through your GitHub App installations are included by default; the toolbar switch remembers an opt-out. Grant new private access on GitHub, where organization approval may be required.
 - Choose an AI release date or your own cutoff. Change the date and filters instantly after scanning. Repeated scans in the same tab reuse verified file details after checking current repository access and history.
 - Explore additions, deletions, monthly activity, and individual commits and files. Copy or download a result image, or create a short public link with that image as its social preview.
 
